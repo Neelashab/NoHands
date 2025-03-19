@@ -1,4 +1,3 @@
-# pushing example code to repo
 
 struct MyLocalizationType
     field1::Int
@@ -77,6 +76,36 @@ function isfull(ch::Channel)
     length(ch.data) ≥ ch.sz_max
 end
 
+# an initial ray extends infinitely after the first line
+struct TerminalRay <: PolylineSegment
+    point::SVector{2, Float64}
+    tangent::SVector{2, Float64}
+    normal::SVector{2, Float64}
+    function TerminalRay(point, prev_point) # same as initial ray, but looks at the previous point
+        tangent = point - prev_point
+        tangent ./= norm(tangent)
+        normal = perp(tangent)
+        new(point, tangent, normal)
+    end
+end
+
+# standard segment has a starting and an ending point that are both finite
+struct StandardSegment <: PolylineSegment
+    p1::SVector{2, Float64}
+    p2::SVector{2, Float64}
+    tangent::SVector{2, Float64}
+    normal::SVector{2, Float64}
+    function StandardSegment(p1, p2)
+        tangent = p2 - p1
+        tangent ./= norm(tangent)
+        normal = perp(tangent)
+        new(p1, p2, tangent, normal) 
+    end
+end
+
+struct Polyline
+    
+end
 
 function my_client(host::IPAddr=IPv4(0), port=4444)
     socket = Sockets.connect(host, port)
