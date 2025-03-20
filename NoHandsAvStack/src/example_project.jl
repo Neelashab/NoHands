@@ -32,6 +32,18 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     end 
 end
 
+function iterative_closest_point(map_points, pointcloud, R, t; max_iters=10, visualize=false)
+end
+
+
+function update_point_associations!(point_associations, pointcloud, map_points, R, t)
+end
+
+function update_point_transform!(point_associations, pointcloud, map_points, R, t)
+end
+
+
+
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
     # set up stuff
     while true
