@@ -45,6 +45,22 @@ end
 
 
 
+
+"""
+# outline of perception plan 
+step 1: collect camera measurements:
+    - take in all available information from `cam_meas_channel`.
+2. get most recent localization state:
+    - get most recent information from localize function
+    - align measurements in global/world coordinates
+3. process camera measurements:
+    - use either ekf and/or bayes filtering to process measurements
+    - object tracking and smoothing 
+4. send updated perception state:
+    - update `MyPerceptionType` object with meaningful values.
+    - replace old perception state with new one in `perception_state_channel`
+"""
+
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
     # set up stuff
     while true
