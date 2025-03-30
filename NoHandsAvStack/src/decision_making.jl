@@ -27,33 +27,8 @@ What exactly is given by perception_state_channel?
 """
 # --- construct polyline --- #
 
-# an initial ray extends infinitely before the first line
-struct InitialRay <: PolylineSegment #extends polyline segment
-    point::SVector{2, Float64} # :: is a type annotation operator
-    tangent::SVector{2, Float64} #tan vector
-    normal::SVector{2, Float64} #normal vector
-    function InitialRay(point, next_point)
-        tangent = next_point - point
-        tangent ./= norm(tangent) # make the tangent into a unit vector 
-        normal = perp(tangent) # normal is the perpendicular of tangent
-        new(point, tangent, normal) # create a new initial ray - only include next point
-    end
-end
-
-# an initial ray extends infinitely after the first line
-struct TerminalRay <: PolylineSegment
-    point::SVector{2, Float64}
-    tangent::SVector{2, Float64}
-    normal::SVector{2, Float64}
-    function TerminalRay(point, prev_point) # same as initial ray, but looks at the previous point
-        tangent = point - prev_point
-        tangent ./= norm(tangent)
-        normal = perp(tangent)
-        new(point, tangent, normal)
-    end
-end
-
 # standard segment has a starting and an ending point that are both finite
+# TO DO: add curvature attribute
 struct StandardSegment <: PolylineSegment
     p1::SVector{2, Float64}
     p2::SVector{2, Float64}
@@ -73,13 +48,10 @@ struct Polyline
         segments = Vector{PolylineSegment}() # initialize segments
         N = length(points)
         @assert N ≥ 2 # must have at least 2 points
-        initial_ray = InitialRay(points[1], points[2]) #start at point 1 instead of 0?
-        push!(segments, initial_ray)
         for i = 1:(N-1)
             seg = StandardSegment(points[i], points[i+1]) 
             push!(segments, seg)
         end
-        terminal_ray = TerminalRay(points[end], points[end-1])
         push!(segments, terminal_ray)
         new(segments) # segments is an array of the points, tan, and norm of each segment
     end
