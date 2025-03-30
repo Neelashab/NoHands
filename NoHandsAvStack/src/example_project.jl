@@ -66,28 +66,6 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
     end
 end
 
-function decision_making(localization_state_channel, 
-        perception_state_channel, 
-        map, 
-        target_road_segment_id, 
-        socket)
-    # do some setup
-    while true
-        latest_localization_state = fetch(localization_state_channel)
-        latest_perception_state = fetch(perception_state_channel)
-
-        # figure out what to do ... setup motion planning problem etc
-        steering_angle = 0.0
-        target_vel = 0.0
-        cmd = (steering_angle, target_vel, true)
-        serialize(socket, cmd)
-    end
-end
-
-function isfull(ch::Channel)
-    length(ch.data) ≥ ch.sz_max
-end
-
 # an initial ray extends infinitely after the first line
 struct TerminalRay <: PolylineSegment
     point::SVector{2, Float64}
@@ -119,6 +97,51 @@ struct Polyline
     
 end
 
+
+"""
+Decision making is the function where the car will decide whether to start, move forward, stop, or change direction (left, right). 
+
+We will recieve a trajectory from the target_road_segment_id. We should define a polyline and connect the line. The polyline may have some straight lines and some curves. Define the bandwith
+
+
+This will power the pure pursuit controller. We will attempt to match the current path of the vehicle to the given path with minimal error using the control law.
+
+We will define a timestep/look ahead distance that will move the car forward X steps at a time. You will fetch the information at each timestep to make a decision about how to move forward.
+
+The car will recieve information from latest_localization_state and latest_perception_state. latest_perception_state will help us understand where the car is in given input of the map. 
+
+Avoid obstacles using heuristics. See stop sign = stop. See 
+
+What exactly is given by localization_state_channel?
+
+What exactly is given by perception_state_channel?
+
+
+"""
+
+function decision_making(localization_state_channel, 
+        perception_state_channel, 
+        map, 
+        target_road_segment_id, 
+        socket)
+    # do some setup
+    while true
+        latest_localization_state = fetch(localization_state_channel)
+        latest_perception_state = fetch(perception_state_channel)
+
+        # figure out what to do ... setup motion planning problem etc
+        steering_angle = 0.0
+        target_vel = 0.0
+        cmd = (steering_angle, target_vel, true)
+        serialize(socket, cmd)
+    end
+end
+
+function isfull(ch::Channel)
+    length(ch.data) ≥ ch.sz_max
+end
+
+
 function my_client(host::IPAddr=IPv4(0), port=4444)
     socket = Sockets.connect(host, port)
     map_segments = VehicleSim.city_map()
@@ -133,6 +156,9 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
 
     #localization_state_channel = Channel{MyLocalizationType}(1)
     #perception_state_channel = Channel{MyPerceptionType}(1)
+    target_segment_channel = Channel{Int}(1) # end point
+    shutdown_channel = Channel{Bool}(1) # end point
+
 
     target_map_segment = 0 # (not a valid segment, will be overwritten by message)
     ego_vehicle_id = 0 # (not a valid id, will be overwritten by message. This is used for discerning ground-truth messages)
