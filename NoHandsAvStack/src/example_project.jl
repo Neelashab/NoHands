@@ -1,11 +1,14 @@
 import Statistics # used to average measurements
 
-# seaprate this struct from gector used by EKF
+# constants
+BOUNDING_BOX = SVector(13.2, 5.7, 5.3)  
+
 struct MyLocalizationType
-    x::Float64                   # position x
-    y::Float64                   # position y
-    z::Float64                   # elevation (? dont think we need this)
-    yaw::Float64                 # heading
+    time::Float64
+    position::SVector{3, Float64} # position of center of vehicle
+    quaternion::SVector{4, Float64} # quaternion [w, x, y, z]
+    velocity::SVector{3, Float64} # [vx, vy, vz]
+    angular_velocity::SVector{3, Float64} # [wx, wy, wz]
 end
 
 # update to include detailed state
@@ -15,13 +18,24 @@ struct MyPerceptionType
     field2::Float64
 end
 
+function heading_to_quaternion(yaw::Float64)
+    # Assuming no roll/pitch, convert yaw → quaternion [w, x, y, z]
+    # Axis of rotation is [0, 0, 1] for yaw
+    half_yaw = yaw / 2
+    return SVector(cos(half_yaw), 0.0, 0.0, sin(half_yaw))  # [w, x, y, z]
+end
+
+# NOTE - this function is also defined in VehicleSim
+# Extract yaw from quaternion [w, x, y, z]
+function extract_yaw_from_quaternion(q::SVector{4, Float64})
+    atan(2(q[1]*q[4] + q[2]*q[3]), 1 - 2*(q[3]^2 + q[4]^2))
+end
+
+
 function localize(gps_channel, imu_channel, localization_state_channel)
 
-    # initialize state to just the few GPS measurements (maybe some IMU, but probably just initialize to 0) (warm up loop)
-    # heading should not be initialized to 0
-
     # WARM UP LOOP 
-    starting_gps = []
+    gps_buffer = []
     start_time = time() 
 
     while time() - start_time < 1.0
@@ -34,28 +48,24 @@ function localize(gps_channel, imu_channel, localization_state_channel)
      init_x = mean([m.lat for m in gps_buffer])
      init_y = mean([m.long for m in gps_buffer])
      init_yaw = mean([m.heading for m in gps_buffer])
+     init_quat = heading_to_quaternion(init_yaw)
 
      # Initialize state vector
-    state = @SVector [
-        init_x,   # x
-        init_y,   # y
-        0.0,      # z (assumed flat ground)
-        init_yaw, # yaw
-        0.0, 0.0, 0.0,  # vx, vy, vz
-        0.0, 0.0, 0.0,  # wx, wy, wz
-        0.0,           # acc
-        time(),        # timestamp
-        0.0            # dummy (13th element?)
+     state = @SVector [
+        init_x, init_y, 0.0, # position
+        init_quat[1], init_quat[2], init_quat[3], init_quat[4], # quaternion
+        0.0, 0.0, 0.0, # positional velocity
+        0.0, 0.0, 0.0 # angular velocity
     ]
 
     Σ = 0.1 * I(13) # initial covariance matrix
-    dt = 0.1 # time step (in seconds)
+    Q = 0.01 * I(13) # process noise
+    R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
+    R_imu = Diagonal([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]) # IMU noise
 
+    last_time = time()
 
     # ENTER MAIN LOOP
-
-    # take most recent GPS and IMU measurements (alternate between both?) and trash the rest (for now)
-    # keep track of dt = current measurement time - last measurement time for prediction step 
     while true
         fresh_gps_meas = []
         while isready(gps_channel)
@@ -69,18 +79,25 @@ function localize(gps_channel, imu_channel, localization_state_channel)
             push!(fresh_imu_meas, meas)
         end
 
-         # Use the most recent measurement from each
+         # Use the most recent measurement from GPS and IMU
          latest_gps = isempty(fresh_gps_meas) ? nothing : last(fresh_gps_meas)
          latest_imu = isempty(fresh_imu_meas) ? nothing : last(fresh_imu_meas)
  
          # Compute dt
          now = time()
-         dt = now - state[12]  # use last timestamp
-         state = setindex(state, now, 12)
+         dt = now - last_time 
 
-         # TODO - Where to grab process and measuremnet noise? I think its in the simulation code?
-         Q = nothing 
-         R = nothing
+
+         # Inject latest IMU into state vector
+        if latest_imu !== nothing
+            state = setindex(state, latest_imu.linear_vel[1], 8)
+            state = setindex(state, latest_imu.linear_vel[2], 9)
+            state = setindex(state, latest_imu.linear_vel[3], 10)
+            state = setindex(state, latest_imu.angular_vel[1], 11)
+            state = setindex(state, latest_imu.angular_vel[2], 12)
+            state = setindex(state, latest_imu.angular_vel[3], 13)
+        end
+
 
         # PREDICT: Where should we be given the previous state and how we expect the car to move?
         # TODO define motion model that accepts localization state and computes:
@@ -88,19 +105,12 @@ function localize(gps_channel, imu_channel, localization_state_channel)
             # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
             # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
 
-            # Inject latest IMU measurements into state
-            # TODO - check what F function accepts as argument
-        if latest_imu !== nothing
-            state = setindex(state, latest_imu.linear_vel[1], 5)
-            state = setindex(state, latest_imu.linear_vel[2], 6)
-            state = setindex(state, latest_imu.linear_vel[3], 7)
-            state = setindex(state, latest_imu.angular_vel[1], 8)
-            state = setindex(state, latest_imu.angular_vel[2], 9)
-            state = setindex(state, latest_imu.angular_vel[3], 10)
-        end
-
+            # where is the car given the previous state and the current controls?
             F = Jac_x_f(state, dt)
+
+            # where did EKF predict it would be given its previous state? 
             predicted_state = f(state, dt)
+
             Σ = F * Σ * F' + Q
 
 
@@ -116,18 +126,42 @@ function localize(gps_channel, imu_channel, localization_state_channel)
 
             if latest_gps !== nothing
                 z = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
-                H = Jac_h_gps(predicted_state)
                 z_pred = h_gps(predicted_state)
-                y = z - z_pred  # residual
-                S = H * Σ * H' + R
-                K = Σ * H' * inv(S)  # Kalman gain
+                y = z - z_pred
+    
+                H = Jac_h_gps(predicted_state)
+                S = H * Σ * H' + R_gps
+                K = Σ * H' * inv(S)
+    
                 state = predicted_state + K * y
                 Σ = (I - K * H) * Σ
             else
                 state = predicted_state
             end
+
+            if latest_imu !== nothing
+                z_imu = vcat(latest_imu.linear_vel, latest_imu.angular_vel)
+                z_imu_pred = h_imu(predicted_state)
+                y_imu = z_imu - z_imu_pred
     
-            localization_state = MyLocalizationType(state[1], state[2], state[3], state[4])
+                H_imu = Jac_h_imu(predicted_state)
+                S_imu = H_imu * Σ * H_imu' + R_imu
+                K_imu = Σ * H_imu' * inv(S_imu)
+    
+                state = predicted_state + K_imu * y_imu
+                Σ = (I - K_imu * H_imu) * Σ
+            else
+                state = predicted_state
+            end
+    
+        # Publish relevant localization state
+        localization_state = MyLocalizationType(
+            now,
+            state[1:3], # positions
+            state[4:7], # quaternion
+            state[8:10], # linear velocity
+            state[11:13] # angular velocity
+        )
 
         if isready(localization_state_channel)
             take!(localization_state_channel)
@@ -135,7 +169,6 @@ function localize(gps_channel, imu_channel, localization_state_channel)
         put!(localization_state_channel, localization_state)
     end 
 end
-
 
 
 
