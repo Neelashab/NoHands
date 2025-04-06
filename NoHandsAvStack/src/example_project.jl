@@ -1,31 +1,134 @@
+import Statistics # used to average measurements
 
+# seaprate this struct from gector used by EKF
 struct MyLocalizationType
-    field1::Int
-    field2::Float64
+    x::Float64                   # position x
+    y::Float64                   # position y
+    z::Float64                   # elevation (? dont think we need this)
+    yaw::Float64                 # heading
 end
 
+# update to include detailed state
+# i.e. vector of vehicle state (bounding boxes, velocity, heading, acceleration, etc.)
 struct MyPerceptionType
     field1::Int
     field2::Float64
 end
 
 function localize(gps_channel, imu_channel, localization_state_channel)
-    # Set up algorithm / initialize variables
+
+    # initialize state to just the few GPS measurements (maybe some IMU, but probably just initialize to 0) (warm up loop)
+    # heading should not be initialized to 0
+
+    # WARM UP LOOP 
+    starting_gps = []
+    start_time = time() 
+
+    while time() - start_time < 1.0
+        if isready(gps_channel)
+            push!(gps_buffer, take!(gps_channel))
+        end
+    end
+
+     # Estimate initial x, y, heading from GPS
+     init_x = mean([m.lat for m in gps_buffer])
+     init_y = mean([m.long for m in gps_buffer])
+     init_yaw = mean([m.heading for m in gps_buffer])
+
+     # Initialize state vector
+    state = @SVector [
+        init_x,   # x
+        init_y,   # y
+        0.0,      # z (assumed flat ground)
+        init_yaw, # yaw
+        0.0, 0.0, 0.0,  # vx, vy, vz
+        0.0, 0.0, 0.0,  # wx, wy, wz
+        0.0,           # acc
+        time(),        # timestamp
+        0.0            # dummy (13th element?)
+    ]
+
+    Σ = 0.1 * I(13) # initial covariance matrix
+    dt = 0.1 # time step (in seconds)
+
+
+    # ENTER MAIN LOOP
+
+    # take most recent GPS and IMU measurements (alternate between both?) and trash the rest (for now)
+    # keep track of dt = current measurement time - last measurement time for prediction step 
     while true
         fresh_gps_meas = []
         while isready(gps_channel)
             meas = take!(gps_channel)
             push!(fresh_gps_meas, meas)
         end
+
         fresh_imu_meas = []
         while isready(imu_channel)
             meas = take!(imu_channel)
             push!(fresh_imu_meas, meas)
         end
-        
-        # process measurements
 
-        localization_state = MyLocalizationType(0,0.0)
+         # Use the most recent measurement from each
+         latest_gps = isempty(fresh_gps_meas) ? nothing : last(fresh_gps_meas)
+         latest_imu = isempty(fresh_imu_meas) ? nothing : last(fresh_imu_meas)
+ 
+         # Compute dt
+         now = time()
+         dt = now - state[12]  # use last timestamp
+         state = setindex(state, now, 12)
+
+         # TODO - Where to grab process and measuremnet noise? I think its in the simulation code?
+         Q = nothing 
+         R = nothing
+
+        # PREDICT: Where should we be given the previous state and how we expect the car to move?
+        # TODO define motion model that accepts localization state and computes:
+            # predicted state = f(previous state, current controls, dt)
+            # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
+            # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
+
+            # Inject latest IMU measurements into state
+            # TODO - check what F function accepts as argument
+        if latest_imu !== nothing
+            state = setindex(state, latest_imu.linear_vel[1], 5)
+            state = setindex(state, latest_imu.linear_vel[2], 6)
+            state = setindex(state, latest_imu.linear_vel[3], 7)
+            state = setindex(state, latest_imu.angular_vel[1], 8)
+            state = setindex(state, latest_imu.angular_vel[2], 9)
+            state = setindex(state, latest_imu.angular_vel[3], 10)
+        end
+
+            F = Jac_x_f(state, dt)
+            predicted_state = f(state, dt)
+            Σ = F * Σ * F' + Q
+
+
+        # CORRECT: Given new sensor measurements, how do we correct our prediction? 
+        # We balance both our prediction given motion model and the actual sensor measurement using Kalman Gain
+        # TODO define measurement model that accepts new GPS measurements and computes:
+            # measurement prediction = h(predicted state)
+            # y = difference between real measurement and predicted measurement (residual)
+            # Kalman gain = predicted covariance * H' * (H * predicted covariance * H' + R)^-1
+            # updated state = predicted state + Kalman gain * y
+            # updated covariance = (I - Kalman gain * H) * predicted covariance
+            #  you can reuse the g in the measurement model in measurements.jl, check to see what the state of x is
+
+            if latest_gps !== nothing
+                z = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
+                H = Jac_h_gps(predicted_state)
+                z_pred = h_gps(predicted_state)
+                y = z - z_pred  # residual
+                S = H * Σ * H' + R
+                K = Σ * H' * inv(S)  # Kalman gain
+                state = predicted_state + K * y
+                Σ = (I - K * H) * Σ
+            else
+                state = predicted_state
+            end
+    
+            localization_state = MyLocalizationType(state[1], state[2], state[3], state[4])
+
         if isready(localization_state_channel)
             take!(localization_state_channel)
         end
@@ -33,15 +136,8 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     end 
 end
 
-function iterative_closest_point(map_points, pointcloud, R, t; max_iters=10, visualize=false)
-end
 
 
-function update_point_associations!(point_associations, pointcloud, map_points, R, t)
-end
-
-function update_point_transform!(point_associations, pointcloud, map_points, R, t)
-end
 
 
 
@@ -53,10 +149,13 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             meas = take!(cam_meas_channel)
             push!(fresh_cam_meas, meas)
         end
+        # step 1 -> get piping done and populate perception channel
+        # for now you can do this with ground truth data
 
         latest_localization_state = fetch(localization_state_channel)
         
         # process bounding boxes / run ekf / do what you think is good
+
 
         perception_state = MyPerceptionType(0,0.0)
         if isready(perception_state_channel)
@@ -64,6 +163,15 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
         end
         put!(perception_state_channel, perception_state)
     end
+
+    # object tracking that runs EKF for other cars using camera measurements
+    # run EKF for each bounding box detected
+    # note -> all cars are the same size so you can cheat a bit (find in rendering code)
+    # just need to estimate position, velocity, heading and velocity (unknown state)
+    # known state 0> z component, length, width, height
+
+    # given bounding box, how do we estimate state? 
+    
 end
 
 function decision_making(localization_state_channel, 
@@ -130,6 +238,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
     imu_channel = Channel{IMUMeasurement}(32)
     cam_channel = Channel{CameraMeasurement}(32)
     gt_channel = Channel{GroundTruthMeasurement}(32)
+    # create an optional shut down channel to kill all threads once one fails
 
     #localization_state_channel = Channel{MyLocalizationType}(1)
     #perception_state_channel = Channel{MyPerceptionType}(1)
