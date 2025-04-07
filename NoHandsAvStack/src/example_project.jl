@@ -59,7 +59,8 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     ]
 
     Σ = 0.1 * I(13) # initial covariance matrix
-    Q = 0.01 * I(13) # process noise
+    
+    Q = 0.01 * I(13) # TODO - customize process noise for each segment of vector
     R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
     R_imu = Diagonal([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]) # IMU noise
 
@@ -86,17 +87,7 @@ function localize(gps_channel, imu_channel, localization_state_channel)
          # Compute dt
          now = time()
          dt = now - last_time 
-
-
-         # Inject latest IMU into state vector
-        if latest_imu !== nothing
-            state = setindex(state, latest_imu.linear_vel[1], 8)
-            state = setindex(state, latest_imu.linear_vel[2], 9)
-            state = setindex(state, latest_imu.linear_vel[3], 10)
-            state = setindex(state, latest_imu.angular_vel[1], 11)
-            state = setindex(state, latest_imu.angular_vel[2], 12)
-            state = setindex(state, latest_imu.angular_vel[3], 13)
-        end
+         last_time = now
 
 
         # PREDICT: Where should we be given the previous state and how we expect the car to move?
@@ -105,11 +96,11 @@ function localize(gps_channel, imu_channel, localization_state_channel)
             # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
             # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
 
-            # where is the car given the previous state and the current controls?
+            # jacobian of current state 
             F = Jac_x_f(state, dt)
 
             # where did EKF predict it would be given its previous state? 
-            predicted_state = f(state, dt)
+            predicted_ref = f(state, dt)
 
             Σ = F * Σ * F' + Q
 
@@ -125,33 +116,38 @@ function localize(gps_channel, imu_channel, localization_state_channel)
             #  you can reuse the g in the measurement model in measurements.jl, check to see what the state of x is
 
             if latest_gps !== nothing
-                z = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
-                z_pred = h_gps(predicted_state)
-                y = z - z_pred
+                # actual measurement
+                z_gps = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
+
+                # actual measurement prediction 
+                z_gps_pred = h_gps(predicted_ref)
+
+                # residual 
+                y_gps = z_gps - z_gps_pred
     
-                H = Jac_h_gps(predicted_state)
-                S = H * Σ * H' + R_gps
-                K = Σ * H' * inv(S)
-    
-                state = predicted_state + K * y
-                Σ = (I - K * H) * Σ
-            else
-                state = predicted_state
+                H_gps = Jac_h_gps(predicted_ref)
+                S_gps = H_gps * Σ * H_gps' + R_gps
+                K_gps = Σ * H_gps' * inv(S_gps)
+                
+                # updated state factoring in state prediction with Kalman gain 
+                predicted_state = predicted_ref + K * y_gps
+
+                # updated covariance
+                Σ = (I - K_gps * H_gps) * Σ
             end
 
             if latest_imu !== nothing
+                # same as GPS
                 z_imu = vcat(latest_imu.linear_vel, latest_imu.angular_vel)
-                z_imu_pred = h_imu(predicted_state)
+                z_imu_pred = h_imu(predicted_ref)
                 y_imu = z_imu - z_imu_pred
     
-                H_imu = Jac_h_imu(predicted_state)
+                H_imu = Jac_h_imu(predicted_ref)
                 S_imu = H_imu * Σ * H_imu' + R_imu
                 K_imu = Σ * H_imu' * inv(S_imu)
     
-                state = predicted_state + K_imu * y_imu
+                predicted_state = predicted_ref + K_imu * y_imu
                 Σ = (I - K_imu * H_imu) * Σ
-            else
-                state = predicted_state
             end
     
         # Publish relevant localization state
