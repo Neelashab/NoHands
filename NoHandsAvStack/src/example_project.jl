@@ -20,7 +20,7 @@ struct MyPerceptionType
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
-function gt_conversion(input)
+function gt_state(input)
     MyLocalizationType(input.time, 
                     input.vehicle_id, 
                     input.position,
@@ -57,14 +57,13 @@ function process_gt(
             meas = fetch(gt_channel) # fetch does not delete the prior measurement
         end
 
-        println("measurements fetched and taken")
+        #println("measurements fetched and taken")
 
-        # TO-DO: process the fresh gt_measurements to produce localization_state and
         # perception_state
         L = length(fresh_gt_meas)
         new_localization_state_from_gt = gt_conversion(fresh_gt_meas[L-1])
 
-        println("new state: $new_localization_state_from_gt")
+        #println("new state: $new_localization_state_from_gt")
 
         if initialized == true
             take!(localization_state_channel)
@@ -131,29 +130,88 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
     end
 end
 
+function get_center(road_id, map, loading_id)
+    # same for straight and curved segments
+    seg = map[road_id]
+    i = road_id == loading_id ? 2 : 1
+    A = seg.lane_boundaries[i].pt_a
+    B = seg.lane_boundaries[i].pt_b
+    C = seg.lane_boundaries[i+1].pt_a
+    D = seg.lane_boundaries[i+1].pt_b
+    (A + B + C + D)/4
+end
+
+# hardcoded for now
+function get_route(map, my_location)
+    [24,17,14,10,84,82,80]
+end
+
+struct StandardSegment <: PolylineSegment
+    p1::SVector{2, Float64}
+    p2::SVector{2, Float64}
+    tangent::SVector{2, Float64}
+    normal::SVector{2, Float64}
+    function StandardSegment(p1, p2)
+        tangent = p2 - p1
+        tangent ./= norm(tangent)
+        normal = perp(tangent)
+        new(p1, p2, tangent, normal) 
+    end
+end
+
+#TO DO: remove starting and terminal rays
+struct Polyline
+    segments::Vector{PolylineSegment} # array-like collection of segments
+    function Polyline(points)
+        segments = Vector{PolylineSegment}() # initialize segments
+        N = length(points)
+        @assert N ≥ 2 # must have at least 2 points
+        for i = 1:(N-1)
+            seg = StandardSegment(points[i], points[i+1]) 
+            push!(segments, seg)
+        end
+        push!(segments, terminal_ray)
+        new(segments) # segments is an array of the points, tan, and norm of each segment
+    end
+    function Polyline(points...)
+        Polyline(points)
+    end
+end
+
+function get_polyline(map, my_location, target_segment)
+    route = get_route(map, my_location, target_segment)
+    points = [get_center(route[i], map, 80) for r =1:length(route)]
+    Polyline(points)
+end
+
 function decision_making(localization_state_channel, 
         perception_state_channel, 
         target_segment_channel,
         shutdown_channel,
         map, 
         socket)
-    # do some setup
-    println("start of decision making")
+    my_location = [0,0]
+    target_segment = 80
+    Polyline = get_polyline(map, my_location, target_segment)
     while true
 
+        # implement pure pursuit controller here
         fetch(shutdown_channel) && break
-
-        latest_localization_state = fetch(localization_state_channel)
-
-        println("dm func state: $latest_localization_state")
-        # latest_perception_state = fetch(perception_state_channel)
-
-        # figure out what to do ... setup motion planning problem etc
-        steering_angle = 0.0
-        target_vel = 4.0
-        cmd = (steering_angle, target_vel, true)
-        serialize(socket, cmd)
-        sleep(0.1) # slow down the loop
+        target_segment = fetch(target_segment_channel)
+        #println("target_segment=$target_segment")
+        if target_segment > 0
+            #println("target_segment=$target_segment")
+            latest_localization_state = fetch(localization_state_channel)
+            println("dm func state: $latest_localization_state")
+            #latest_perception_state = fetch(perception_state_channel)
+            # figure out what to do ... setup motion planning problem etc
+            steering_angle = 0.0
+            target_vel = 1.0
+            cmd = (steering_angle, target_vel, true)
+            currTime = Dates.format(now(), "HH:MM:SS.s")
+            serialize(socket, cmd)
+        end
+        sleep(0.5)
     end
 end
 
