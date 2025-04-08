@@ -1324,4 +1324,117 @@ function shutdown_listener(shutdown_channel)
     end
 end
 
+################################################################################
+#ALTERNATE ROUTING IMPLEMENTATION (bef i saw kath routing stuff) idk if it works
+################################################################################
+#function build_graph(map_segments)
+#    graph = Dict{Int, Vector{Tuple{Int, Float64}}}()
+#    for segment in map_segments
+#        u = segment.start_id
+#        v = segment.end_id
+#        weight = norm(segment.p2 - segment.p1)  # Euclidean distance
+
+#        if !haskey(graph, u)
+#            graph[u] = []
+#        end
+#        push!(graph[u], (v, weight))
+
+#        # If roads are bidirectional, add the reverse edge
+#        if !haskey(graph, v)
+#            graph[v] = []
+#        end
+#        push!(graph[v], (u, weight))
+#    end
+#    return graph
+#end
+
+#function dijkstra(graph::Dict{Int, Vector{Tuple{Int, Float64}}}, start_node::Int)
+#    dist = Dict(n => Inf for n in keys(graph))
+#    prev = Dict{Int, Union{Nothing, Int}}(n => nothing for n in keys(graph))
+#    dist[start_node] = 0.0
+
+#    q = PriorityQueue(dist, Base.Order.Forward)
+
+#    while !isempty(q)
+#        u = dequeue!(q)
+
+#        for (v, weight) in graph[u]
+#            alt = dist[u] + weight
+#            if alt < dist[v]
+#                dist[v] = alt
+#                prev[v] = u
+#                q[v] = alt
+#            end
+#        end
+#    end
+
+#    return dist, prev
+#end
+
+#function reconstruct_path(prev::Dict{Int, Union{Nothing, Int}}, target::Int)
+#    path = []
+#    while target !== nothing
+#        pushfirst!(path, target)
+#        target = prev[target]
+#    end
+#    return path
+#end
+
+#function decision_making(localization_state_channel, 
+#    perception_state_channel, 
+#    map_segments, 
+#    target_road_segment_id, 
+#    socket)
+
+#    graph = build_graph(map_segments)
+#    route = []
+#    route_idx = 1
+
+#    while true
+#        latest_localization_state = fetch(localization_state_channel)
+#        latest_perception_state = fetch(perception_state_channel)
+ 
+#        current_segment_id = get_current_segment(latest_localization_state, map_segments)
+
+#        # Re-plan if the route is empty or the target has changed
+#        if isempty(route) || route[end] != target_road_segment_id
+#            dist, prev = dijkstra(graph, current_segment_id)
+#            route = reconstruct_path(prev, target_road_segment_id)
+#            route_idx = 1
+#        end
+
+#        if route_idx <= length(route)
+#            next_segment = route[route_idx]
+#            # Implement logic to drive towards `next_segment`
+#            # Increment route_idx when the segment is reached
+#        end
+
+#        steering_angle = 0.0  # Placeholder
+#        target_vel = 0.0      # Placeholder
+#        cmd = (steering_angle, target_vel, true)
+#        serialize(socket, cmd)
+#    end
+#end
+
+#function get_current_segment(localization_state, map_segments)
+#    vehicle_position = localization_state.position
+#    for segment in map_segments
+#        if is_point_near_segment(vehicle_position, segment)
+#            return segment.start_id  # or another identifier for the segment
+#        end
+#    end
+#    return nothing  # or handle the case where no segment is found
+#end
+
+#function is_point_near_segment(point::SVector{2, Float64}, segment; threshold=1.0)
+#    p = point
+#    a = segment.p1
+#    b = segment.p2
+#    ab = b - a
+#    ap = p - a
+#    t = clamp(dot(ap, ab) / dot(ab, ab), 0.0, 1.0)  # Projection scalar onto segment
+#    closest = a + t * ab  # Closest point on the segment
+#    distance = norm(p - closest)
+#    return distance < threshold
+#end
 
