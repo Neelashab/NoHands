@@ -1,3 +1,4 @@
+using Graphs
 
 struct MyLocalizationType
     vehicle_id::Int
@@ -36,8 +37,8 @@ struct StandardSegment <: PolylineSegment
     p2::SVector{2, Float64}
     tangent::SVector{2, Float64}
     normal::SVector{2, Float64}
-    road::Int # road ID
-    part::Int # what part of your road is it on? - not curved or long, always one
+    road::Int
+    part::Int
     function StandardSegment(p1, p2, road, part)
         tangent = p2 - p1
         tangent ./= norm(tangent)
@@ -300,14 +301,8 @@ function get_path(parents, t)
     return path
 end
 
-"""
-Use Disjtrkas shortest path algorithm in order to calculate the best route
-"""
-
 function get_route(map_segments, start_position, target_id)
-    println("start get route function")
     start_id = get_pos_seg_id(map_segments, start_position)
-    println("this is the start ID: $start_id")
 
     node1 = []
     node2 = []
@@ -326,8 +321,6 @@ function get_route(map_segments, start_position, target_id)
         end
     end
 
-    println("finished looping through map segments")
-
     no_node = max(maximum(node1), maximum(node2))
     no_arc = Base.length(node1)
 
@@ -341,22 +334,21 @@ function get_route(map_segments, start_position, target_id)
         distmx[node1[i], node2[i]] = dists[i]
     end
 
-    println("call dijkstra's shortest path")
+    println("Implement dijkstra's")
     state = dijkstra_shortest_paths(graph, start_id, distmx)
-    println("state: $state")
     path = get_path(state.parents, target_id)
 end
 
-# function log_route(route, roads, parts, points)
-#     log_file = open("decision_making_route.txt", "a")
-#     currTime = Dates.format(now(), "HH:MM:SS.s")
-#     println(log_file, currTime)
-#     println(log_file, "route=$route")
-#     println(log_file, "roads=$roads")
-#     println(log_file, "parts=$parts")
-#     println(log_file, "points=$points")
-#     close(log_file)
-# end
+function log_route(route, roads, parts, points)
+    log_file = open("decision_making_route.txt", "a")
+    currTime = Dates.format(now(), "HH:MM:SS.s")
+    println(log_file, currTime)
+    println(log_file, "route=$route")
+    println(log_file, "roads=$roads")
+    println(log_file, "parts=$parts")
+    println(log_file, "points=$points")
+    close(log_file)
+end
 
 function get_first_point(seg)
     A = seg.lane_boundaries[1].pt_a
@@ -372,8 +364,8 @@ Assuming only 90° turns for now
 center calculation is copied code from map.jl
 2. long lane
 """
-function get_middle_point(seg)
-    # io = open("get_middle_point.txt", "a")
+function get_middel_point(seg)
+    # io = open("get_middel_point.txt", "a")
     # println(io, "seg=$seg")
     A = seg.lane_boundaries[1].pt_a
     B = seg.lane_boundaries[1].pt_b
@@ -383,7 +375,6 @@ function get_middle_point(seg)
     # println(io, "B=$B")
     # println(io, "C=$C")
     # println(io, "D=$D")
-    # convert road into 2 points - start and end, in the center
     pt_a = (A+C)/2
     pt_b = (B+D)/2
     # println(io, "pt_a=$pt_a")
@@ -399,15 +390,11 @@ function get_middle_point(seg)
     curved2 = !isapprox(curvature2, 0.0; atol=1e-6)
 
     add_mid_point = false
-    # should calculate both radii from 1/curvature (left and right, larger and smaller)
-    # only care abt size here, not nessicarily l-r
     if curved1 && curved2
         rad1 = 1.0 / abs(curvature1)
         rad2 = 1.0 / abs(curvature2)
         rad = (rad1+rad2)/2
         # println(io, "rad=$rad")
-        # calculate if the center is left or right
-        # center calculation copied from map.jl
         left = curvature1 > 0
         if left
             if sign(delta[1]) == sign(delta[2])
@@ -428,13 +415,10 @@ function get_middle_point(seg)
         # println(io, "delta_to_center=$delta_to_center")
         direction_from_center = delta_to_center/norm(delta_to_center)
         # println(io, "direction_from_center=$direction_from_center")
-        # unit vector * radius is the additional vector to arc
         vector_from_center = rad*direction_from_center
         # println(io, "vector_from_center=$vector_from_center")
         pt_m = center + vector_from_center
         add_mid_point = true
-    # also add midpoint if the road is long
-    # TO DO: test if this helps or not 
     elseif dist > 79.9
         add_mid_point = true
     end
@@ -444,33 +428,32 @@ function get_middle_point(seg)
 end
 
 function get_polyline(map_segments, start_position, target_segment)
-    println("get route")
-    route = get_route(map_segments, start_position, target_segment) # get the route, map, start point, target from server
+    println("get new route")
+    route = get_route(map_segments, start_position, target_segment)
     println("route=$route")
     points = [start_position]
     roads = [route[1]]
-    parts = [1] # for roads that you need to split into 3 points/ 2 parts - curved road has middle points 
+    parts = [1] # curve road has middle points
     route_count = length(route)
-    for r = 2:route_count # start from second point because first point is yourself
+    for r = 2:route_count
         seg = map_segments[route[r]]
-        if r == route_count # if it is the target, it'll be a loading zone
+        if r == route_count
             push!(points, get_loading_center(route[r], map_segments))
             push!(roads, route[r])
             push!(parts, 1)
-        else # other road segments, push every first point
+        else
             push!(points, get_first_point(seg))
             push!(roads, route[r])
             push!(parts, 1)
         end
-         # circular and long roads have a mid point
-        add_mid_point, mid_point = get_middle_point(seg)
+        add_mid_point, mid_point = get_middel_point(seg)
         if add_mid_point
             push!(points, mid_point)
             push!(roads, route[r])
             push!(parts, 2)
         end
     end
-    #log_route(route, roads, parts, points)
+    log_route(route, roads, parts, points)
     poly = Polyline(points, roads, parts)
     return poly
 end
@@ -495,7 +478,6 @@ function target_velocity(current_velocity,
     # adjusted_limit = (best_next < 5 && angular_effect > 0.001) ? 1.5 : adjusted_limit
     # target_vel = target_vel > adjusted_limit ? adjusted_limit : target_vel
     
-    # increase velocity as you're moving, but adjusted based on angle effect
     target_vel = current_velocity + 0.5
     angular_effect = abs(angular_velocity)+abs(steering_angle)
     adjusted_limit = angular_effect > pi/2 ? 1.0 : (1.0+(speed_limit-1.0) * (1-2*angular_effect/pi))
@@ -504,7 +486,7 @@ function target_velocity(current_velocity,
     #slow down when vehicle approaches the target
     poly_count_down = poly_count - best_next
     target_vel = poly_count_down < 2 && target_vel > poly_count_down ? (poly_count_down+1.5) : target_vel
-    target_vel = poly_count_down < 1 && distance_to_target < veh_wid ? 0 : target_vel # you are at the loading zone's center
+    target_vel = poly_count_down < 1 && distance_to_target < veh_wid ? 0 : target_vel
 end
 
 function decision_making(localization_state_channel, 
@@ -513,16 +495,11 @@ function decision_making(localization_state_channel,
         shutdown_channel,
         map_segments, 
         socket)
-    
-    println("set lookahead time")
     ls = 2.0
     last_target_segment = 0
-    # log for debugging
-    #log_file = open("decision_making_log.txt", "a")
-    #currTime = Dates.format(now(), "HH:MM:SS.s")
-    #println(log_file, currTime)
-    println("start decision making function")
-
+    log_file = open("decision_making_log.txt", "a")
+    currTime = Dates.format(now(), "HH:MM:SS.s")
+    println(log_file, currTime)
 
     dummy_points = [[-91.66666666666667, -80.0], 
         [-91.66666666666667, 0.0], 
@@ -533,32 +510,27 @@ function decision_making(localization_state_channel,
     ]
     dummy_roads = [1,2,3,4,5,6]
     dummy_parts = [1,1,1,1,1,1]
-    poly = Polyline(dummy_points, dummy_roads, dummy_parts) # dummy polyline
-
+    poly = Polyline(dummy_points, dummy_roads, dummy_parts)#dummy polyline
     poly_count = 0
     poly_leaving = 0 # front wheel touch the end of this line
     best_next = 0
     max_signed_dist = 0.0
     signed_dist = 0.0
     target_location = [0.0,0.0]
-    println("initalize while loop")
     while true
         fetch(shutdown_channel) && break
-        println("fetch target segment")
         target_segment = fetch(target_segment_channel)
-        println("got target segment = $target_segment")
         if target_segment > 0
-            println("fetch latest localization state")
             latest_localization_state = fetch(localization_state_channel)
             pos = latest_localization_state.position
-            println("position from localization: $pos")
             veh_pos = pos[1:2]
             if target_segment!=last_target_segment
-                #currTime = Dates.format(now(), "HH:MM:SS.s")
-                #println(log_file, currTime)
+                currTime = Dates.format(now(), "HH:MM:SS.s")
+                println(log_file, currTime)
                 println("new target_segment= $target_segment")
                 target_location = get_center(target_segment, map_segments, target_segment)
                 println("target_location=$target_location")
+                # ------ PROBLEM HERE ------ #
                 poly = get_polyline(map_segments, veh_pos, target_segment)
                 println("poly=$poly")
                 poly_count = length(poly.segments)
@@ -569,33 +541,30 @@ function decision_making(localization_state_channel,
                 signed_dist = 0.0
                 last_target_segment = target_segment
             end
-            # messages from server/localization
             ori = latest_localization_state.orientation
             vel = latest_localization_state.velocity
             a_vel = latest_localization_state.angular_velocity
             size = latest_localization_state.size
-            # convert orientation to rotation matrix
             # Rot_3D is Rotation Matrix in 3D
             # When vehicle rotates on 2D with θ,
             # Rot_3D = [cos(θ)  -sin(θ)  0;
             #           sin(θ)   cos(θ)  0;
             #               0         0  1]
             Rot_3D = Rot_from_quat(ori)
-            veh_vel = vel[1:2] # only want the first two (x, y)
+            veh_vel = vel[1:2]
             veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
             veh_len = size[1] #vehicle Length
             veh_wid = size[2] #vehicle width
-            rear_wl = veh_pos - 0.5 * veh_len * veh_dir # rear wheel (L) decides the movement
-            distance_to_target = norm(target_location - veh_pos) # just for reference
+            rear_wl = veh_pos - 0.5 * veh_len * veh_dir 
+            distance_to_target = norm(target_location-veh_pos)
             curr_vel = norm(veh_vel)
             print("tgt=$target_segment")
-            # calculate the steering angle
             steering_angle = 0.0
-            if curr_vel > 0.00001 # help handle error
-                len0 = curr_vel * ls # how far you are expected to move given the calculation
-                min_diff = Inf # looking for smallest number
-                three_after = poly_leaving + 3 # check 3 next points on the route
-                three_after = three_after > poly_count ? poly_count : three_after # might be less than 3 at end of task
+            if curr_vel > 0.00001
+                len0 = curr_vel * ls
+                min_diff = distance_to_target
+                three_after = poly_leaving + 3
+                three_after = three_after > poly_count ? poly_count : three_after
                 best_next = 0
                 #println("poly_leaving=$poly_leaving")
                 #println("three_after=$three_after")
@@ -610,7 +579,6 @@ function decision_making(localization_state_channel,
                         continue #too close
                     end
                     sign = signOfDot0(veh_dir, try_point - rear_wl)
-                    # make sure you're moving forward and its not behind you
                     if sign > 0
                         l = norm(try_point - rear_wl)
                         diff = abs(l - len0)
@@ -621,13 +589,10 @@ function decision_making(localization_state_channel,
                     end
                 end #for i = poly_leaving+1 : poly_count
                 #println("best_next=$best_next")
-                # if best next is = 0, that means you did not find a good point, so you should go to the next polyline segment
                 best_next = best_next > 0 ? best_next : poly_leaving+1
-                # if calculation for best_next is greater than number of polylines, you go to the max polyline count
                 best_next = best_next > poly_count ? poly_count : best_next
                 poly_next_seg = poly.segments[best_next]
                 #println("poly_next_seg=$poly_next_seg")
-                #---these lines are for print display---#
                 next_road = poly_next_seg.road
                 next_part = poly_next_seg.part
                 print(",poly=$poly_count")
@@ -642,14 +607,12 @@ function decision_making(localization_state_channel,
                     #print(",debugn")
                     if abs(signed_dist) > abs(max_signed_dist)
                         max_signed_dist = signed_dist
-                        #println(log_file, "max_signed_dist=$max_signed_dist between lv=$leaving_road($leaving_part),to=$next_road($next_part)")
+                        println(log_file, "max_signed_dist=$max_signed_dist between lv=$leaving_road($leaving_part),to=$next_road($next_part)")
                     end
                 else
                     print(",lv=0(0),to=$next_road($next_part)")
                 end
                 print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
-                #---these lines are for print display---#
-                # control law calculation
                 next_point = poly_next_seg.p2
                 distance_to_node = norm(next_point - rear_wl)
                 cos_alpha = dot(veh_dir, next_point - rear_wl)/norm(next_point-rear_wl)
@@ -657,7 +620,6 @@ function decision_making(localization_state_channel,
                 alpha = acos(cos_alpha)
                 sin_alpha = sin(alpha)
                 left_or_right = left_right(veh_dir, next_point - rear_wl)
-                # 0.75 is for smoothing to help with error
                 steering_angle = 0.75 * atan(2.0*veh_len*sin_alpha*left_or_right, curr_vel*ls)
             end #if curr_vel > 0.0
             #latest_perception_state = fetch(perception_state_channel)            
@@ -669,7 +631,7 @@ function decision_making(localization_state_channel,
         end #if target_segment > 0
         sleep(0.05)
     end#while true
-    #close(log_file)
+    close(log_file)
 end#function def
 
 function isfull(ch::Channel)
