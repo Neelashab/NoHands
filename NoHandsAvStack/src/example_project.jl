@@ -130,7 +130,7 @@ function signed_distance(polyline::Polyline, point, index_start, index_end)
         return dis_min
     end
     #print(",debug3")
-    for i = index_start:index_end
+    for i = 1:N
         #println("i=$i, dis_min=$dis_min")
         dist = signed_distance_standard(polyline.segments[i], point)
         #println("i=$i, dist=$dist, dis_min=$dis_min")
@@ -209,6 +209,7 @@ function localize(
         shutdown_channel)
     # Set up algorithm / initialize variables
     while true
+        sleep(0.001)
 
         fetch(shutdown_channel) && break
 
@@ -232,6 +233,7 @@ end
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
     # set up stuff
     while true
+        sleep(0.001)
         
         fetch(shutdown_channel) && break
 
@@ -254,7 +256,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 end
 
 function is_in_seg(pos, seg)
-    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == loading_zone
+    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == "loading_zone"
     i = is_loading_zone ? 3 : 2
     A = seg.lane_boundaries[1].pt_a
     B = seg.lane_boundaries[1].pt_b
@@ -714,29 +716,29 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=true)
     end)
     
     if use_gt
-        @async process_gt(gt_channel,
+        errormonitor(@async process_gt(gt_channel,
                       shutdown_channel,
                       localization_state_channel,
                       perception_state_channel, 
-                      ego_vehicle_id_channel)
+                      ego_vehicle_id_channel))
     else
-        @async localize(gps_channel, 
+        errormonitor(@async localize(gps_channel, 
                     imu_channel, 
                     localization_state_channel, 
-                    shutdown_channel)
+                    shutdown_channel))
 
-        @async perception(cam_channel, 
+        errormonitor(@async perception(cam_channel, 
                       localization_state_channel, 
                       perception_state_channel, 
-                      shutdown_channel)
+                      shutdown_channel))
     end
 
-    @async decision_making(localization_state_channel, 
+    errormonitor(@async decision_making(localization_state_channel, 
                            perception_state_channel, 
                            target_segment_channel, 
                            shutdown_channel,
                            map_segments, 
-                           socket)
+                           socket))
 end
 
 function shutdown_listener(shutdown_channel)

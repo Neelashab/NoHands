@@ -1,22 +1,18 @@
 module NoHandsAvStack
 
-using ColorTypes
+using VehicleSim
 using Dates
-using GeometryBasics
 using Graphs
-using MeshCat
-using MeshCatMechanisms
-using Random
-using Rotations
-using RigidBodyDynamics
-using Infiltrator
 using LinearAlgebra
+using Serialization
+using Sockets
+using StaticArrays
+
+using GeometryBasics
+using Rotations
 using Printf
 using SparseArrays
-using Suppressor
-using Sockets
-using Serialization
-using StaticArrays
+
 
 include("client.jl")
 include("example_project.jl")
