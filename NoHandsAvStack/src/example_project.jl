@@ -1,4 +1,5 @@
 using Graphs
+using Rotations
 
 struct MyLocalizationType
     vehicle_id::Int
@@ -552,7 +553,8 @@ function decision_making(localization_state_channel,
             # Rot_3D = [cos(θ)  -sin(θ)  0;
             #           sin(θ)   cos(θ)  0;
             #               0         0  1]
-            Rot_3D = Rot_from_quat(ori)
+            q = QuatRotation(ori)
+            Rot_3D = Matrix(q)
             veh_vel = vel[1:2]
             veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
             veh_len = size[1] #vehicle Length
