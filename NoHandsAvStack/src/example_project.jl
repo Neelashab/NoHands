@@ -55,9 +55,7 @@ end
 
 
 
-function aminita_perception(cam_meas_channel, gt_channel, perception_state_channel)
-
-    # input information:
+function perception(cam_meas_channel, gt_channel, perception_state_channel)
 
     """
     cam_meas_channel
@@ -149,26 +147,26 @@ function aminita_perception(cam_meas_channel, gt_channel, perception_state_chann
             push!(fresh_gt_meas, meas)
         end
 
-        # TODO: implement neelasha's method of combining buffer with grabbing the correct measurement
-        # TODO: create necessary matrices
-        curr_camera = fresh_cam_meas[1]
-        curr_gt = fresh_gt_meas[1]
+        # TODO: if they are empty shoudl we do something?
+        latest_cam = isempty(fresh_cam_meas) ? nothing : last(fresh_cam_meas)
+        latest_gt = isempty(fresh_gt_meas) ? nothing : last(fresh_gt_meas)
+
 
         # uncpack the latest camera measurement
-        focal_len = curr_camera.focal_length
-        px_len = curr_camera.pixel_length
-        img_w = curr_camera.image_width
-        img_h = curr_camera.image_height
-        t = curr_camera.time
-        camera_id = curr_camera.camera_id
+        focal_len = latest_cam.focal_length
+        px_len = latest_cam.pixel_length
+        img_w = latest_cam.image_width
+        img_h = latest_cam.image_height
+        t = latest_cam.time
+        camera_id = latest_cam.camera_id
         
         # get_cam_transform(camera_id) is camera → car
-        T_body_from_cam = get_cam_transform(camera_id) 
+        T_body_from_cam = VehichleSim.get_cam_transform(camera_id) 
 
     
         # unpack the latest localization state
-        ego_position = curr_gt.position
-        ego_quaternion = curr_gt.orientation
+        ego_position = latest_gt.position
+        ego_quaternion = latest_gt.orientation
 
 
         for box in latest_cam_meas.bounding_boxes
@@ -195,9 +193,9 @@ function aminita_perception(cam_meas_channel, gt_channel, perception_state_chann
 
             # use transforamtion matrices to convert middle of object from camera to world coordinates
             # get_body_transform(quat, loc) is car → world
-            T_world_from_body = get_body_transform(ego_quaternion, ego_position)
+            T_world_from_body = VehichleSim.get_body_transform(ego_quaternion, ego_position)
             # get_body_transform(quat, loc) is car → world
-            T_world_from_cam = multiply_transforms(T_world_from_body, T_body_from_cam)
+            T_world_from_cam = VehichleSim.multiply_transforms(T_world_from_body, T_body_from_cam)
             pos = T_world_from_cam * point_from_cam
 
 
@@ -221,10 +219,21 @@ function aminita_perception(cam_meas_channel, gt_channel, perception_state_chann
             # the covairance to be very large (veyr uncertain)
             if !matched
                 new_id += 1
-                initial_orientation = SVector(1.0, 0.0, 0.0, 0.0)         # identity quaternion
+
+                initial_orientation = track_orientation_estimate(ego_position, ego_quaternion, pos[1:3])
+                
                 initial_velocity = SVector(0.0, 0.0, 0.0)                  # unknown, so assume zero
                 initial_angular_velocity = SVector(0.0, 0.0, 0.0)          # same
-                initial_covariance = I(13) * 10.0                          # large uncertainty
+                
+                cov_diag = [
+                    0.5, 0.5, 0.5,              # position → confident
+                    2.0, 2.0, 2.0, 2.0,         # orientation (quaternion) → medium uncertainty
+                    10.0, 10.0, 0.5,            # velocity → very uncertain (except for z-value)
+                    10.0, 10.0, 0.5             # angular velocity → very uncertain (except for z-value)
+                ] 
+                initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
+                
+    
 
                 new_track = TrackedObject(new_id,
                               t,
@@ -247,6 +256,59 @@ function aminita_perception(cam_meas_channel, gt_channel, perception_state_chann
     
 end
 
+function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64})
+
+    lane_width = 10.0       # based on the city_map defintions in map.jl
+
+    # compute heading of the ego vehicle
+    # TODO: check if neelasha already has "finding heading logic" from her function
+    ego_yaw = VehichleSim.extract_yaw_from_quaternion(ego_quat)
+    ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))  # 2D heading vector
+
+    # compute how sideways teh object is from ego
+    delta = obj_pos[1:2] - ego_pos[1:2]
+    lateral_offset = abs(det(hcat(ego_heading, delta)) / norm(ego_heading))
+
+    # decide orientation of the object
+    if lateral_offset < lane_width / 2
+        # same lane = same heaidng
+        return eqo_quat
+    elseif lateral_offset < lane_width * 1.5
+        # opposite lane = flipped heading
+        flipped_yaw = ego_yaw + π
+        return SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
+    else
+        # we have no way to guess which side of the perpendicular bidirectional road the object is on
+        # so we will just always assume its moving toward ego to be conservative and extra safe
+        
+        """
+        if the object is on a perpendicular lane, and you want to assume it's moving toward you, then:
+
+        if it's on your left side, assume it's heading right (east).
+
+        if it's on your right side, assume it's heading left (west)
+        """
+
+    end
+
+end
+
+
+
+
+   
+    
+    
+    
+    # converts your ego car’s quaternion into a rotation matrix
+    R = VehichleSim.Rot_from_quat(ego_quat)
+
+    # eaxtracting ego's foward direction from rotation matrix
+    ego_forward = R[:, 1]
+
+
+
+
 
 function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
@@ -257,9 +319,6 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
             * returns a 13x13 matrix describing how each component of the next state is affected 
               by each component of the current state
             * needed to calculate the covariance of the next state
-        Jac_x_h(x) - returns the Jacobian matrix of the measurement model
-            * x is a state vector with the following info: position, quaternion, velocity, angular velocity
-            * correct our predicted state using new measurements
     """
 
     """
@@ -282,21 +341,22 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     R = I(3) * 1.0 # the code in measurement.jl does not provide a noise matrix for camera like it does 
                   # for GPS and IMU, so we will just use a simple identity matrix ; this is equivalent to saying
                   # i trust x, y, z measurements equally
+    # TODO take data and calculate what noise is 
     Q = I(13) * 0.1 # noise matrix # im not sure if i did this correctly 
     P = track.P # covariance matrix of the object
     
     # predict the next state using the process model
     # using the previous state and some motion model, we predict where the object should be now.
     # F will linearize the nonlinear motion function f(x, Δt) around the current estimate of the state
-    F = Jac_x_f(x, Δt)
+    F = VehichleSim.Jac_x_f(x, Δt)
     x_pred = f(x, Δt)                       # recall that x is "previous" state
     P_pred = F * P * F' + Q
+   
 
     # finding the "actual state" using the measurement model
     # what actually ended up happening (use the position found by the camera)
-    H = Jac_h_camera(x_pred) # linearizes this relationship around the current guess (x_pred) using the Jacobian
+    H = hcat(I(3), zeros(3, 10)) # linearizes this relationship around the current guess (x_pred) using the Jacobian
     y = z - x_pred[1:3] # residual = actual_measurement - expected_measurement
-
     S = H * P_pred * H' + R
     K = P_pred * H' * inv(S)                # the Kalman gain, how trustworthy was our prediction? 
                                             # kalman_gain = predicted_covariance * H' * inverse(residual_covariance)
