@@ -40,28 +40,34 @@ struct StandardSegment <: PolylineSegment
     normal::SVector{2, Float64}
     road::Int
     part::Int
-    function StandardSegment(p1, p2, road, part)
+    stop::Int
+    function StandardSegment(p1, p2, road, part, stop)
         tangent = p2 - p1
         tangent ./= norm(tangent)
         normal = perp(tangent)
-        new(p1, p2, tangent, normal, road, part)
+        new(p1, p2, tangent, normal, road, part, stop)
     end
 end
 
 struct Polyline
     segments::Vector{PolylineSegment}
-    function Polyline(points, roads, parts)
+    function Polyline(points, roads, parts, stops)
         segments = Vector{PolylineSegment}()
         N = length(points)
         @assert N ≥ 2
         for i = 1:N-1
-            seg = StandardSegment(points[i], points[i+1],roads[i],parts[i])
+            seg = StandardSegment(points[i], points[i+1],roads[i],parts[i], stops[i])
             push!(segments, seg)
         end
         new(segments)
     end
     function Polyline(points...)
         Polyline(points)
+    end
+
+    # default constructor 
+    function Polyline()
+        segments = Vector{PolylineSegment}()
     end
 end
 
@@ -257,7 +263,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 end
 
 function is_in_seg(pos, seg)
-    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == "loading_zone"
+    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == loading_zone
     i = is_loading_zone ? 3 : 2
     A = seg.lane_boundaries[1].pt_a
     B = seg.lane_boundaries[1].pt_b
@@ -342,13 +348,14 @@ function get_route(map_segments, start_position, target_id)
     path = get_path(state.parents, target_id)
 end
 
-function log_route(route, roads, parts, points)
+function log_route(route, roads, parts, stops, points)
     log_file = open("decision_making_route.txt", "a")
     currTime = Dates.format(now(), "HH:MM:SS.s")
     println(log_file, currTime)
     println(log_file, "route=$route")
     println(log_file, "roads=$roads")
     println(log_file, "parts=$parts")
+    println(log_file, "stops=$stops")
     println(log_file, "points=$points")
     close(log_file)
 end
@@ -437,6 +444,7 @@ function get_polyline(map_segments, start_position, target_segment)
     points = [start_position]
     roads = [route[1]]
     parts = [1] # curve road has middle points
+    stops = [0]
     route_count = length(route)
     for r = 2:route_count
         seg = map_segments[route[r]]
@@ -449,20 +457,39 @@ function get_polyline(map_segments, start_position, target_segment)
             push!(roads, route[r])
             push!(parts, 1)
         end
+
         add_mid_point, mid_point = get_middel_point(seg)
         if add_mid_point
             push!(points, mid_point)
             push!(roads, route[r])
             push!(parts, 2)
+            
+            push!(stops, 0)
+        end
+
+        push!(stops, has_stop_sign(seg))
+
+    end
+
+    log_route(route, roads, parts, stops, points)
+    poly = Polyline(points, roads, stops, parts)
+    return poly
+end
+
+function has_stop_sign(seg)
+    for i=1:length(seg.lane_types)
+        if seg.lane_types[i] == stop_sign
+            return 1
         end
     end
-    log_route(route, roads, parts, points)
-    poly = Polyline(points, roads, parts)
-    return poly
+
+    return 0
 end
 
 function target_velocity(current_velocity, 
         distance_to_target,
+        found_stop_sign, 
+        distance_to_stop_sign,
         steering_angle,
         angular_velocity,
         veh_wid, 
@@ -490,6 +517,14 @@ function target_velocity(current_velocity,
     poly_count_down = poly_count - best_next
     target_vel = poly_count_down < 2 && target_vel > poly_count_down ? (poly_count_down+1.5) : target_vel
     target_vel = poly_count_down < 1 && distance_to_target < veh_wid ? 0 : target_vel
+
+    # slow to zero when vehicle approaches stop sign
+    if found_stop_sign
+        target_vel = min(target_vel, distance_to_stop_sign - 3)
+    end 
+
+    target_vel = target_vel < 0 ? 0 : target_vel
+
 end
 
 function decision_making(localization_state_channel, 
@@ -504,22 +539,18 @@ function decision_making(localization_state_channel,
     currTime = Dates.format(now(), "HH:MM:SS.s")
     println(log_file, currTime)
 
-    dummy_points = [[-91.66666666666667, -80.0], 
-        [-91.66666666666667, 0.0], 
-        [-80.0, 11.666666666666668], 
-        [0.0, 11.666666666666668], 
-        [21.666666666666668, 33.33333333333333], 
-        [31.666666666666668, 73.33333333333333]
-    ]
-    dummy_roads = [1,2,3,4,5,6]
-    dummy_parts = [1,1,1,1,1,1]
-    poly = Polyline(dummy_points, dummy_roads, dummy_parts)#dummy polyline
+    poly = Polyline() #dummy polyline
     poly_count = 0
     poly_leaving = 0 # front wheel touch the end of this line
     best_next = 0
     max_signed_dist = 0.0
     signed_dist = 0.0
     target_location = [0.0,0.0]
+
+    # heuristic flags
+    found_stop_sign = false
+    stop_sign_location = [0.0,0.0]
+
     while true
         fetch(shutdown_channel) && break
         target_segment = fetch(target_segment_channel)
@@ -533,7 +564,6 @@ function decision_making(localization_state_channel,
                 println("new target_segment= $target_segment")
                 target_location = get_center(target_segment, map_segments, target_segment)
                 println("target_location=$target_location")
-                # ------ PROBLEM HERE ------ #
                 poly = get_polyline(map_segments, veh_pos, target_segment)
                 println("poly=$poly")
                 poly_count = length(poly.segments)
@@ -560,7 +590,10 @@ function decision_making(localization_state_channel,
             veh_len = size[1] #vehicle Length
             veh_wid = size[2] #vehicle width
             rear_wl = veh_pos - 0.5 * veh_len * veh_dir 
+            front_end = veh_pos + 0.5 * veh_len * veh_dir 
             distance_to_target = norm(target_location-veh_pos)
+            distance_to_stop_sign = norm(stop_sign_location-front_end)
+
             curr_vel = norm(veh_vel)
             print("tgt=$target_segment")
             steering_angle = 0.0
@@ -576,7 +609,13 @@ function decision_making(localization_state_channel,
                     #println("i=$i")
                     # this p2 is the same point as p1 of next poly segment
                     # we cannot use p1, because vehicle starts from p1 of first poly segment
-                    try_point = poly.segments[i].p2#here p2 is the same point as p1 of next poly segment
+                    try_point = poly.segments[i].p2 #here p2 is the same point as p1 of next poly segment
+                    
+                    if poly.segments[i].stop == 1
+                        found_stop_sign = true
+                        stop_sign_location = try_point
+                    end
+
                     try_dist = norm(try_point - rear_wl)
                     if try_dist < veh_len #front wheel touched poly line seg
                         poly_leaving = i
@@ -626,8 +665,14 @@ function decision_making(localization_state_channel,
                 left_or_right = left_right(veh_dir, next_point - rear_wl)
                 steering_angle = 0.75 * atan(2.0*veh_len*sin_alpha*left_or_right, curr_vel*ls)
             end #if curr_vel > 0.0
-            #latest_perception_state = fetch(perception_state_channel)            
-            target_vel = target_velocity(curr_vel, distance_to_target, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist)
+            #latest_perception_state = fetch(perception_state_channel)  
+            if found_stop_sign == true && curr_vel == 0
+                found_stop_sign = false
+            end
+
+            target_vel = target_velocity(curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3],    veh_wid, poly_count, best_next, signed_dist)
+
+
             cmd = (steering_angle, target_vel, true)
             steering_degree = round(steering_angle * 180 / 3.14, digits=3)
             println(", str=$steering_degree, v=$curr_vel")
