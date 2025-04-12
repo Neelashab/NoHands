@@ -263,7 +263,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 end
 
 function is_in_seg(pos, seg)
-    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == loading_zone
+    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == VehicleSim.loading_zone
     i = is_loading_zone ? 3 : 2
     A = seg.lane_boundaries[1].pt_a
     B = seg.lane_boundaries[1].pt_b
@@ -467,7 +467,7 @@ function get_polyline(map_segments, start_position, target_segment)
             push!(stops, 0)
         end
 
-        push!(stops, has_stop_sign(seg))
+        push!(stops, has_stop_sign(seg) ? 1 : 0)
 
     end
 
@@ -477,13 +477,13 @@ function get_polyline(map_segments, start_position, target_segment)
 end
 
 function has_stop_sign(seg)
+    yes_stop_sign = false
     for i=1:length(seg.lane_types)
-        if seg.lane_types[i] == stop_sign
-            return 1
+        if seg.lane_types[i] == VehicleSim.stop_sign
+            yes_stop_sign = true
         end
     end
-
-    return 0
+    return yes_stop_sign
 end
 
 function target_velocity(current_velocity, 
@@ -520,7 +520,9 @@ function target_velocity(current_velocity,
 
     # slow to zero when vehicle approaches stop sign
     if found_stop_sign
-        target_vel = min(target_vel, distance_to_stop_sign - 3)
+        dist = distance_to_stop_sign - 3
+        @info("found stop sign is true, target vel: $target_vel, $dist")
+        target_vel = min(target_vel, dist)
     end 
 
     target_vel = target_vel < 0 ? 0 : target_vel
@@ -614,6 +616,7 @@ function decision_making(localization_state_channel,
                     if poly.segments[i].stop == 1
                         found_stop_sign = true
                         stop_sign_location = try_point
+                        distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
                     end
 
                     try_dist = norm(try_point - rear_wl)
