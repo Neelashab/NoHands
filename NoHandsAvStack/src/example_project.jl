@@ -472,7 +472,7 @@ function get_polyline(map_segments, start_position, target_segment)
     end
 
     log_route(route, roads, parts, stops, points)
-    poly = Polyline(points, roads, stops, parts)
+    poly = Polyline(points, roads, parts, stops)
     return poly
 end
 
@@ -494,7 +494,9 @@ function target_velocity(current_velocity,
         angular_velocity,
         veh_wid, 
         poly_count, 
-        best_next, signed_dist; speed_limit=4)
+        best_next, 
+        signed_dist; 
+        speed_limit=4)
     # abs_dist = abs(signed_dist)
     # #try to increase speed if it's not off track
     # increase = abs_dist < 3.0 ? 0.5 : 0.2
@@ -521,9 +523,12 @@ function target_velocity(current_velocity,
     # slow to zero when vehicle approaches stop sign
     if found_stop_sign
         dist = distance_to_stop_sign - 3
-        @info("found stop sign is true, target vel: $target_vel, $dist")
+        @info("found stop sign is true, target vel: $target_vel, dist from stop sign: $dist")
         target_vel = min(target_vel, dist)
+    else
+        @info("stop sign not found")
     end 
+
 
     target_vel = target_vel < 0 ? 0 : target_vel
 
@@ -599,7 +604,12 @@ function decision_making(localization_state_channel,
             curr_vel = norm(veh_vel)
             print("tgt=$target_segment")
             steering_angle = 0.0
-            if curr_vel > 0.00001
+
+            if found_stop_sign == true && curr_vel < 0.08
+                found_stop_sign = false
+            end
+
+            if curr_vel > 0.0001
                 len0 = curr_vel * ls
                 min_diff = distance_to_target
                 three_after = poly_leaving + 3
@@ -615,8 +625,9 @@ function decision_making(localization_state_channel,
                     
                     if poly.segments[i].stop == 1
                         found_stop_sign = true
+                        @info("polyline coordinate = $try_point, i=$i")
                         stop_sign_location = try_point
-                        distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
+                        #distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
                     end
 
                     try_dist = norm(try_point - rear_wl)
@@ -669,11 +680,8 @@ function decision_making(localization_state_channel,
                 steering_angle = 0.75 * atan(2.0*veh_len*sin_alpha*left_or_right, curr_vel*ls)
             end #if curr_vel > 0.0
             #latest_perception_state = fetch(perception_state_channel)  
-            if found_stop_sign == true && curr_vel == 0
-                found_stop_sign = false
-            end
 
-            target_vel = target_velocity(curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3],    veh_wid, poly_count, best_next, signed_dist)
+            target_vel = target_velocity(curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist)
 
 
             cmd = (steering_angle, target_vel, true)
