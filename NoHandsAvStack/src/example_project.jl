@@ -1,3 +1,10 @@
+#include("../../VehicleSim/src/VehicleSim.jl")
+using Graphs
+using Rotations
+using StaticArrays
+using LinearAlgebra
+using Sockets
+abstract type PolylineSegment end
 
 struct MyLocalizationType
     time::Float64
@@ -55,206 +62,148 @@ end
 
 
 
-function perception(cam_meas_channel, gt_channel, perception_state_channel)
+function perception(cam_meas_channel, gt_channel, perception_state_channel, shutdown_channel)
 
-    """
-    cam_meas_channel
-
-    camera measurements:
-        - time: timestamp of measurement
-        - camera_id: 1 or 2 (indicating which camera produced the bounding boxes)
-        - focal_length: focal length of camera
-        - pixel_length: length of a pixel in meters
-        - image_width: width of image in pixels
-        - image_height: height of image in pixels
-        - bounding_boxes: list of bounding boxes represented by top-left and bottom-right pixel coordinates
-        "Each pixel corresponds to a pixel_len x pixel_len patch at focal_len away from a pinhole model."
-
-    localization (for now we are reciecing from ground truth): 
-        - time: timestamp of measurement
-        - vehicle_id: id of vehicle (since we are only focusing on this car, it'll be constant)
-        - position: 3D position of center of vehicle
-        - orientation: represented as quaternion
-        - velocity: 3D velocity of vehicle
-        - angular_velocity: angular velocity around x,y,z axes
-        - size: length, width, height of 3D bounding box centered at (position/orientation)
-      
-    perception: we will have to figure this out later, bc we still aren't exactly sure what we want
-    our perception to measure. but we have to use previous perception info to build on the current one
-
-    """
-
-    # set up stuff
-    # do i need to create some initial guesses for when the program starts?
-
-    # grab most recent cam_measurement
-        # like perception, should we do a buffer and select based on that?
-
-    # grab the latest localization state (for now we will be using ground truth)
-    # from the localization state, create the neceeary transformation matrices
-
-    # process the bounding boxes
-        # for each bounding box...
-            # pre process: convert TL and BR coordinagets to get the whole box
-            # note: all cars are the same size so you can cheat a bit, find information in render code
-            # idenitfy which camera took the measurement (where is it on the car)
-            # convert image pixel → 3D direction (using camera intrinsics: focal stuff etc. )
-            # known state 0> z component, length, width, height
-            # use localalization matrix and camera infor to convert boudning box to world coordinates
-
-            # using EKF... (need to find vel, heading, veloctity ; and match it to a tack)
-            # see if an exsisitng path track is close enough to  bounding box
-            # if so, update the track
-            # if not, create a new track
-            # if a track is not updated for a while, delete it (it might have exited the frame)
-    
-    # once he have updated everything:
-        # create a new perception state object
-            # so far im thinking thet the perception structure infcludes the list of all the paths
-        # put the new perception state into the perception_state_channel
-
-    # ok not sure if this is perception or decion planning , but i was thinking of a signial
-    # we should implenet a rule "keep one cars distance for eveyr 10 mph your going"
-    # so if the car is going 20 mph, we should be 2 car lengths away from the car in front of us
-        # so our in front cehck should and stop if we are too close to the car in front of us
-        # should we make a flag/ or signal for this
-
-    # initializing perception state
+   
     next_id = 1
-    tracked_objs = TrackedObject[]
-    perception_state = MyPerceptionType(0.0, next_id, tracked_objs)
-    put!(perception_state_channel, perception_state)
+    tracks = TrackedObject[]
+    #perception_state = MyPerceptionType(0.0, next_id, tracks)
+    #put!(perception_state_channel, perception_state)
 
-
-    # program
-    while true
-
-        # set up stuff
-        vehicle_size = SVector(13.2, 5.7, 5.3) # retrieved from measurements.jl
-
-        # fetching camera measurement 
-        fresh_cam_meas = []
-        while isready(cam_meas_channel)
-            meas = take!(cam_meas_channel)
-            push!(fresh_cam_meas, meas)
-        end
-
-        #  during the development phase, we will be using the ground truth localization
-        #  but in the future we will be using the localization function (dont forget to update the function header)
-        fresh_gt_meas = []
-        while isready(gt_channel)
-            meas = take!(gt_channel)
-            push!(fresh_gt_meas, meas)
-        end
-
-        # TODO: if they are empty shoudl we do something?
-        latest_cam = isempty(fresh_cam_meas) ? nothing : last(fresh_cam_meas)
-        latest_gt = isempty(fresh_gt_meas) ? nothing : last(fresh_gt_meas)
-
-
-        # uncpack the latest camera measurement
-        focal_len = latest_cam.focal_length
-        px_len = latest_cam.pixel_length
-        img_w = latest_cam.image_width
-        img_h = latest_cam.image_height
-        t = latest_cam.time
-        camera_id = latest_cam.camera_id
-        
-        # get_cam_transform(camera_id) is camera → car
-        T_body_from_cam = VehichleSim.get_cam_transform(camera_id) 
-
+    try
+        while true
+            #println("Loop iteration")
     
-        # unpack the latest localization state
-        ego_position = latest_gt.position
-        ego_quaternion = latest_gt.orientation
+            if isready(shutdown_channel) && take!(shutdown_channel)
+                break
+            end
 
-
-        for box in latest_cam_meas.bounding_boxes
-
-            # pre processing the box
-            top_left_x = box[1]
-            top_left_y = box[2]
-            bottom_right_x = box[3]
-            bottom_right_y = box[4]
-
-            # center of bounding box
-            u = (top_left_x + bottom_right_x) / 2   # horizontal (x pixel)
-            v = (top_left_y + bottom_right_y) / 2   # vertical (y pixel)
-
-            # converting pixel to 3D point (with respect to camera)
-            # using pinhole camera model
-            x = (u - img_w / 2) * px_len
-            y = (v - img_h / 2) * px_len
-            real_vehicle_height = vehicle_size[3]
-            pixel_height = bottom_right_y - top_left_y
-            z = (focal_len * real_vehicle_height) / (pixel_height * px_len)
-            point_from_cam = SVector{4, Float64}(x, y, z, 1.0)
-
-
-            # use transforamtion matrices to convert middle of object from camera to world coordinates
-            # get_body_transform(quat, loc) is car → world
-            T_world_from_body = VehichleSim.get_body_transform(ego_quaternion, ego_position)
-            # get_body_transform(quat, loc) is car → world
-            T_world_from_cam = VehichleSim.multiply_transforms(T_world_from_body, T_body_from_cam)
-            pos = T_world_from_cam * point_from_cam
-
-
-            # try to match bounding box with existing track
-            # if no match, create a new track
-            matched = false
-            for (i, track) in enumerate(tracks)
-                dist = norm(track.pos[1:2] - pos[1:2])  
-                if dist < 5
-                    Δt = t - track.time
-                    updated_track = ekf(track, pos, Δt)
-                    tracks[i] = updated_track  
-                    matched = true
+            # gather the needed information
+    
+            fresh_cam_meas = []
+            while isready(cam_meas_channel)
+                meas = take!(cam_meas_channel)
+                push!(fresh_cam_meas, meas)
+            end
+    
+            # this is to be replaced with localization
+            fresh_gt_meas = []
+            while isready(gt_channel)
+                meas = take!(gt_channel)
+                push!(fresh_gt_meas, meas)
+            end
+    
+    
+            if isempty(fresh_cam_meas) || isempty(fresh_gt_meas)
+                if !isopen(cam_meas_channel) && !isopen(gt_channel)
                     break
                 end
+                ## no new measurments , take a break
+                sleep(0.05)
+                continue
             end
-
-            # TODO: should i have a better estimate for veloctity and heading?
-            # beecause right now its 0 0 and how is the EKF update supposed to work with
-            # for know i just set all values (excpet positon and ID) to zero and set 
-            # the covairance to be very large (veyr uncertain)
-            if !matched
-                new_id += 1
-
-                initial_orientation = track_orientation_estimate(ego_position, ego_quaternion, pos[1:3])
-                
-                initial_velocity = SVector(0.0, 0.0, 0.0)                  # unknown, so assume zero
-                initial_angular_velocity = SVector(0.0, 0.0, 0.0)          # same
-                
-                cov_diag = [
-                    0.5, 0.5, 0.5,              # position → confident
-                    2.0, 2.0, 2.0, 2.0,         # orientation (quaternion) → medium uncertainty
-                    10.0, 10.0, 0.5,            # velocity → very uncertain (except for z-value)
-                    10.0, 10.0, 0.5             # angular velocity → very uncertain (except for z-value)
-                ] 
-                initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
-                
     
+            latest_cam = last(fresh_cam_meas)
+            latest_gt = last(fresh_gt_meas)
 
-                new_track = TrackedObject(new_id,
-                              t,
-                              pos,
-                              initial_orientation,
-                              initial_velocity,
-                              initial_angular_velocity,
-                              initial_covariance)
-
-                push!(tracks, new_track)
+           
+            if isempty(latest_cam.bounding_boxes)
+                # no bouding boxes yet, take a break
+                sleep(0.05)
+                continue
             end
-        end
+    
+            # unpack GT state (will become localization)
+            ego_position = latest_gt.position
+            ego_quaternion = latest_gt.orientation
+    
+            # get transformation matrices
+            camera_id = latest_cam.camera_id
+            T_body_from_cam = VehicleSim.get_cam_transform(camera_id)
+            T_cam_camrot = VehicleSim.get_rotated_camera_transform()
+            T_body_camrot = VehicleSim.multiply_transforms(T_body_from_cam, T_cam_camrot)
+            T_world_body = VehicleSim.get_body_transform(ego_quaternion, ego_position)
+            T_world_camrot = VehicleSim.multiply_transforms(T_world_body, T_body_camrot)
 
-        perception_state = MyPerceptionType(t, new_id, tracks)
-        if isready(perception_state_channel)
-            take!(perception_state_channel)
+    
+            focal_len = latest_cam.focal_length
+            px_len = latest_cam.pixel_length
+            img_w = latest_cam.image_width + 1
+            img_h = latest_cam.image_height + 1
+            t = latest_cam.time
+            vehicle_size = SVector(13.2, 5.7, 5.3)
+    
+            for box in latest_cam.bounding_boxes
+                u = (box[1] + box[3]) / 2
+                v = (box[2] + box[4]) / 2
+                x = (u - img_w / 2) * px_len
+                y = (v - img_h / 2) * px_len
+                
+                z = 15
+                
+                
+                point_from_cam = SVector{4, Float64}(x, y, z, 1.0)
+                pos = T_world_camrot * point_from_cam
+                pos[3] = vehicle_size[3] / 2
+
+    
+                matched = false
+                for (i, track) in enumerate(tracks)
+                    dist = norm(track.pos[1:2] - pos[1:2])
+                    if dist < 5
+                       
+                        Δt = t - track.time
+                        updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
+                        tracks[i] = updated_track
+                        matched = true
+                        break
+
+                    end
+                end
+    
+                if !matched
+    
+                    initial_orientation = track_orientation_estimate(
+                        ego_position, ego_quaternion, SVector{3, Float64}(pos[1:3]))
+    
+                    initial_velocity = SVector(0.0, 0.0, 0.0)
+                    initial_angular_velocity = SVector(0.0, 0.0, 0.0)
+    
+                    cov_diag = [
+                        0.5, 0.5, 10.0, 
+                        2.0, 2.0, 2.0, 2.0,
+                        10.0, 10.0, 0.5,
+                        10.0, 10.0, 0.5
+                    ]
+                    initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
+    
+                    new_track = TrackedObject(
+                        next_id, t, pos,
+                        initial_orientation,
+                        initial_velocity,
+                        initial_angular_velocity,
+                        initial_covariance
+                    )
+    
+                    push!(tracks, new_track)
+                    next_id += 1
+                end
+            end
+    
+            perception_state = MyPerceptionType(t, next_id, tracks)
+            put!(perception_state_channel, perception_state)
+    
+            sleep(0.05)
         end
-        put!(perception_state_channel, perception_state)   
-    end       
+    catch e
+        println("ERROR in perception: ", e)
+        println(sprint(showerror, e))
+    end
+      
     
 end
+
+
 
 function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64})
 
@@ -262,7 +211,7 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
 
     # compute heading of the ego vehicle
     # TODO: check if neelasha already has "finding heading logic" from her function
-    ego_yaw = VehichleSim.extract_yaw_from_quaternion(ego_quat)
+    ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
     ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))  # 2D heading vector
 
     # compute how sideways teh object is from ego
@@ -272,42 +221,24 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
     # decide orientation of the object
     if lateral_offset < lane_width / 2
         # same lane = same heaidng
-        return eqo_quat
+        return ego_quat
     elseif lateral_offset < lane_width * 1.5
         # opposite lane = flipped heading
         flipped_yaw = ego_yaw + π
         return SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
     else
-        # we have no way to guess which side of the perpendicular bidirectional road the object is on
-        # so we will just always assume its moving toward ego to be conservative and extra safe
-        
-        """
-        if the object is on a perpendicular lane, and you want to assume it's moving toward you, then:
+        # TODO: UPDATE THIS SECTION ( IF TIME )
+        # else 
+        # use function to find what segement the object is in
+        # use function to know what part of the lane the object is in (helps with dircetion)
+        # make heading guess based on the direction 
+        return ego_quat
+        ## ^^ TODO: this is a placeholder, need to implement the logic
 
-        if it's on your left side, assume it's heading right (east).
-
-        if it's on your right side, assume it's heading left (west)
-        """
 
     end
 
 end
-
-
-
-
-   
-    
-    
-    
-    # converts your ego car’s quaternion into a rotation matrix
-    R = VehichleSim.Rot_from_quat(ego_quat)
-
-    # eaxtracting ego's foward direction from rotation matrix
-    ego_forward = R[:, 1]
-
-
-
 
 
 function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
@@ -332,24 +263,25 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
 
     # creating state vector for the object
+    # creating state vector for the object
     x = vcat(track.pos,                     # 1:3 position
              track.orientation,             # 4:7 orientation quaternion
              track.vel,                     # 8:10 velocity
              track.angular_velocity)        # 11:13 angular velocity
 
     # setting up necessary noise matrices
-    R = I(3) * 1.0 # the code in measurement.jl does not provide a noise matrix for camera like it does 
-                  # for GPS and IMU, so we will just use a simple identity matrix ; this is equivalent to saying
-                  # i trust x, y, z measurements equally
+    R = Diagonal(@SVector [1.0, 1.0, 50.0])
+    # we trust x and y but not z 
+ 
     # TODO take data and calculate what noise is 
-    Q = I(13) * 0.1 # noise matrix # im not sure if i did this correctly 
+    Q = I(13) * 10 # noise matrix # im not sure if i did this correctly 
     P = track.P # covariance matrix of the object
     
     # predict the next state using the process model
     # using the previous state and some motion model, we predict where the object should be now.
     # F will linearize the nonlinear motion function f(x, Δt) around the current estimate of the state
-    F = VehichleSim.Jac_x_f(x, Δt)
-    x_pred = f(x, Δt)                       # recall that x is "previous" state
+    F = VehicleSim.Jac_x_f(x, Δt)
+    x_pred = VehicleSim.f(x, Δt)                       # recall that x is "previous" state
     P_pred = F * P * F' + Q
    
 
@@ -377,6 +309,7 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     return ekf_updated_track
 end
     
+
 
 
 
@@ -432,8 +365,28 @@ struct StandardSegment <: PolylineSegment
 end
 
 struct Polyline
-    
+    segments::Vector{PolylineSegment}
+    function Polyline(points, roads, parts, stops)
+        segments = Vector{PolylineSegment}()
+        N = length(points)
+        @assert N ≥ 2
+        for i = 1:N-1
+            seg = StandardSegment(points[i], points[i+1],roads[i],parts[i], stops[i])
+            push!(segments, seg)
+        end
+        new(segments)
+    end
+    function Polyline(points...)
+        Polyline(points)
+    end
+
+    # default constructor 
+    function Polyline()
+        segments = Vector{PolylineSegment}()
+    end
 end
+    
+
 
 function my_client(host::IPAddr=IPv4(0), port=4444)
     socket = Sockets.connect(host, port)
