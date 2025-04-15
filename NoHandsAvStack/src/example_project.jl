@@ -1,9 +1,11 @@
 #include("../../VehicleSim/src/VehicleSim.jl")
 using Graphs
+
 using Rotations
 using StaticArrays
 using LinearAlgebra
 using Sockets
+
 abstract type PolylineSegment end
 
 struct MyLocalizationType
@@ -64,7 +66,8 @@ end
 
 function perception(cam_meas_channel, gt_channel, perception_state_channel, shutdown_channel)
 
-   
+    println("Perception function started!")
+
     next_id = 1
     tracks = TrackedObject[]
     #perception_state = MyPerceptionType(0.0, next_id, tracks)
@@ -82,6 +85,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
     
             fresh_cam_meas = []
             while isready(cam_meas_channel)
+                #println("Received camera message")
                 meas = take!(cam_meas_channel)
                 push!(fresh_cam_meas, meas)
             end
@@ -89,6 +93,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             # this is to be replaced with localization
             fresh_gt_meas = []
             while isready(gt_channel)
+                #println("Received GT message")
                 meas = take!(gt_channel)
                 push!(fresh_gt_meas, meas)
             end
@@ -109,6 +114,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
            
             if isempty(latest_cam.bounding_boxes)
                 # no bouding boxes yet, take a break
+                #println("No bounding boxes yet")
                 sleep(0.05)
                 continue
             end
@@ -124,6 +130,8 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             T_body_camrot = VehicleSim.multiply_transforms(T_body_from_cam, T_cam_camrot)
             T_world_body = VehicleSim.get_body_transform(ego_quaternion, ego_position)
             T_world_camrot = VehicleSim.multiply_transforms(T_world_body, T_body_camrot)
+            #println("T_world_camrot: ", T_world_camrot)
+            #println("\n\n")
 
     
             focal_len = latest_cam.focal_length
@@ -134,27 +142,79 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             vehicle_size = SVector(13.2, 5.7, 5.3)
     
             for box in latest_cam.bounding_boxes
+                #println("hello?.")
                 u = (box[1] + box[3]) / 2
                 v = (box[2] + box[4]) / 2
                 x = (u - img_w / 2) * px_len
                 y = (v - img_h / 2) * px_len
+
+                uu = VehicleSim.convert_to_pixel(img_w, px_len, x)
+
+          
+
+                #pitch = atan2(-forward[2], norm(forward[[1, 3]]))
                 
-                z = 15
+
+                # find center of bounding box 
+                # so the camera is on the top of the vehicle
+                # TODO: find exact adjacent_leg
+                    # will be how above the base/center is
+                # TODO: find angle camera is pointing alpha 
+                    # angle between the camera's optical axis and the direction to the center of the bounding box
+                # hypotnuse/depth = adjacent_leg / cos(alpha) 
+
+                # research -- 
+                    #  t_cam_to_body = [1.35, 1.7, 2.4]
+                    #  t_cam_to_body[2] = -1.7
+                # so for both cmaeras its 2.4 meters above the base 
                 
+            
+                pitch = 0.02 - atan(y/focal_len) # 0.02 is the built in oiriginal tilt, add more andle 
+                # angle R_cam_to_body = RotY(0.02)
+                # alpha = 0.02 radians 
+
+                #R = T_world_camrot[1:3, 1:3]
+                #rad = atan((-R[3,1])/(sqrt(R[3,2]^2 + R[3,3]^2)))
+                #(pi/2 - 0.02)
+                pitch_fixed = (pi/2 - pitch) 
+                
+                z = (2.4)/cos(pitch_fixed) # both camera 1 & 2 have a height of 2.4 above the base/center
+            
+
+                # we know t_cam rot is basically the camera is respect to the world 
+                # if i drew a straight line from camera to ob until when does it hit a height of 2.5
+                # until the height of that staight line 
+
+                #@info "uu is $uu, u is $u"
+                
+                #z = focal_len
+                #depth = 7 0
+
+                #xx = x * z / focal_len
+                #yy = y * z / focal_len
                 
                 point_from_cam = SVector{4, Float64}(x, y, z, 1.0)
-                pos = T_world_camrot * point_from_cam
-                pos[3] = vehicle_size[3] / 2
 
+                pos = T_world_camrot * point_from_cam
+
+                #@info "pos is $pos"
+                #@info "gt is $ego_position"
+                #@info "gt orientation is $ego_quaternion"
+
+                pos[3] = vehicle_size[3] / 2
+                #println("world position (before EFK): ", pos)
     
                 matched = false
                 for (i, track) in enumerate(tracks)
                     dist = norm(track.pos[1:2] - pos[1:2])
-                    if dist < 5
+                    if dist < 15
                        
                         Δt = t - track.time
+                        #vel_est = pos[1:3] - track.pos
                         updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
                         tracks[i] = updated_track
+                        #println("EFK Pos Estimate: ", updated_track.pos)
+                        #println("Vel: ", updated_track.vel)
                         matched = true
                         break
 
@@ -170,7 +230,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
                     initial_angular_velocity = SVector(0.0, 0.0, 0.0)
     
                     cov_diag = [
-                        0.5, 0.5, 10.0, 
+                        5.0, 50.0, 1.0, 
                         2.0, 2.0, 2.0, 2.0,
                         10.0, 10.0, 0.5,
                         10.0, 10.0, 0.5
@@ -191,6 +251,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             end
     
             perception_state = MyPerceptionType(t, next_id, tracks)
+            #println("Pos: ", perception_state.tracked_objs[1].pos)
             put!(perception_state_channel, perception_state)
     
             sleep(0.05)
@@ -199,7 +260,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
         println("ERROR in perception: ", e)
         println(sprint(showerror, e))
     end
-      
+    println("Perception finished.")
     
 end
 
@@ -240,7 +301,6 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
 
 end
 
-
 function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
     From measurement.jl:
@@ -270,11 +330,11 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
              track.angular_velocity)        # 11:13 angular velocity
 
     # setting up necessary noise matrices
-    R = Diagonal(@SVector [1.0, 1.0, 50.0])
+    R = Diagonal(@SVector [1.0, 15.0, 1.0])
     # we trust x and y but not z 
  
     # TODO take data and calculate what noise is 
-    Q = I(13) * 10 # noise matrix # im not sure if i did this correctly 
+    Q = I(13) * 10  # noise matrix # im not sure if i did this correctly 
     P = track.P # covariance matrix of the object
     
     # predict the next state using the process model
@@ -308,7 +368,6 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     
     return ekf_updated_track
 end
-    
 
 
 
