@@ -26,12 +26,6 @@ function heading_to_quaternion(yaw::Float64)
     return SVector(cos(half_yaw), 0.0, 0.0, sin(half_yaw))  # [w, x, y, z]
 end
 
-# NOTE - this function is also defined in VehicleSim
-# Extract yaw from quaternion [w, x, y, z]
-function extract_yaw_from_quaternion(q::SVector{4, Float64})
-    atan(2(q[1]*q[4] + q[2]*q[3]), 1 - 2*(q[3]^2 + q[4]^2))
-end
-
 
 function localize(gps_channel, imu_channel, localization_state_channel)
 
