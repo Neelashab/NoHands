@@ -10,6 +10,7 @@ struct MyLocalizationType
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
+"""
 struct MyPerceptionType
     vehicle_id::Int
     position::SVector{3, Float64} # position of center of vehicle
@@ -17,6 +18,23 @@ struct MyPerceptionType
     velocity::SVector{3, Float64}
     angular_velocity::SVector{3, Float64} # angular velocity around x,y,z axes
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
+end
+"""
+
+struct TrackedObject
+    id::Int
+    time::Float64
+    pos::SVector{3, Float64}  # x, y, z
+    orientation::SVector{4, Float64}
+    vel::SVector{3, Float64}  # vx, vy, vz
+    angular_velocity::SVector{3, Float64}
+    P::SMatrix{13,13,Float64} # covariance matrix
+end
+
+struct MyPerceptionType
+    time::Float64
+    next_id::Int
+    tracked_objs::Vector{TrackedObject}
 end
 
 function gt_state(gt)
@@ -61,7 +79,7 @@ struct Polyline
         end
         new(segments)
     end
-    function Polyline(points...)
+    function Polyline(points...) # var args
         Polyline(points)
     end
 
@@ -96,7 +114,7 @@ function signOfDot1(a, b)
     elseif dot_prod < 0
         return -1.0
     else
-        return 1.0 #???
+        return 1.0 
     end
 end
 
@@ -374,8 +392,8 @@ Assuming only 90° turns for now
 center calculation is copied code from map.jl
 2. long lane
 """
-function get_middel_point(seg)
-    # io = open("get_middel_point.txt", "a")
+function get_middle_point(seg)
+    # io = open("get_middle_point.txt", "a")
     # println(io, "seg=$seg")
     A = seg.lane_boundaries[1].pt_a
     B = seg.lane_boundaries[1].pt_b
@@ -458,7 +476,7 @@ function get_polyline(map_segments, start_position, target_segment)
             push!(parts, 1)
         end
 
-        add_mid_point, mid_point = get_middel_point(seg)
+        add_mid_point, mid_point = get_middle_point(seg)
         if add_mid_point
             push!(points, mid_point)
             push!(roads, route[r])
@@ -486,7 +504,10 @@ function has_stop_sign(seg)
     return yes_stop_sign
 end
 
-function target_velocity(current_velocity, 
+function target_velocity(
+        veh_pos,
+        avoid_collision_speed,
+        current_velocity, 
         distance_to_target,
         found_stop_sign, 
         distance_to_stop_sign,
@@ -495,20 +516,9 @@ function target_velocity(current_velocity,
         veh_wid, 
         poly_count, 
         best_next, 
-        signed_dist; 
-        speed_limit=4)
-    # abs_dist = abs(signed_dist)
-    # #try to increase speed if it's not off track
-    # increase = abs_dist < 3.0 ? 0.5 : 0.2
-    # target_vel = abs_dist < 5.0 ? current_velocity + increase : current_velocity
-    # target_vel = abs_dist > veh_wid ? target_vel / 2 : target_vel
-    # target_vel = target_vel < 0.5 ? 0.5 : target_vel
-    # #adjust speed limit by the angular velocity and steering angle
-    # angular_effect = abs(angular_velocity)+abs(steering_angle)
-    # adjusted_limit = angular_effect > pi/2 ? 1.0 : (1.0+(speed_limit-1.0) * (1-2*angular_effect/pi))
-    # #adjust speed limit in the beginning 
-    # adjusted_limit = (best_next < 5 && angular_effect > 0.001) ? 1.5 : adjusted_limit
-    # target_vel = target_vel > adjusted_limit ? adjusted_limit : target_vel
+        signed_dist,
+        perception_state_channel; 
+        speed_limit=7)
     
     target_vel = current_velocity + 0.5
     angular_effect = abs(angular_velocity)+abs(steering_angle)
@@ -528,15 +538,90 @@ function target_velocity(current_velocity,
     else
         @info("stop sign not found")
     end 
-
+    
+    target_vel = avoid_collision_speed < target_vel ? avoid_collision_speed : target_vel
 
     target_vel = target_vel < 0 ? 0 : target_vel
 
 end
 
+#our model to avoid collision:
+#my vehicle has a potential collision cone
+#the cone angle is 30 degree (pi/6)
+#the cone center is my vehicle center
+# \-------------/
+#  \----30-----/
+#   \-degree--/
+#    \-------/
+#     \-----/
+#      \|^|/
+#       |+|
+#when other vehicle is within my potential collision cone
+#the distance is the key to stop/slow myself
+#
+function avoid_collision(localization_state_channel, 
+    perception_state_channel,
+    avoid_collision_channel,
+    shutdown_channel)
+    
+    #vehicle_size = SVector(13.2, 5.7, 5.3)
+
+    dt = 0.05    
+    time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
+    while true
+        fetch(shutdown_channel) && break
+        avoid_collision_speed = 10
+        latest_localization_state = fetch(localization_state_channel)
+
+		# Rot_3D is Rotation Matrix in 3D
+		# When vehicle rotates on 2D with θ,
+		# Rot_3D = [cos(θ)  -sin(θ)  0;
+		#           sin(θ)   cos(θ)  0;
+		#               0         0  1]
+
+		#Rot_3D = Rot_from_quat(latest_localization_state.ori)
+
+        q = QuatRotation(latest_localization_state.ori)
+        Rot_3D = Matrix(q)
+
+		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
+
+		new_perception_list = fetch(perception_state_channel)
+        count = length(new_perception_list)
+        if count >0
+            for i=1:count
+                one_perception = new_perception_list[i]
+                displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
+                distance = norm(displacement)
+                #infront is projection of a unit vector on my vehicle orientation
+                # is the other car within 30 degrees of mine
+                infront = dot(displacement, veh_dir)/distance
+                #within 30 degree cone means cos(15degree)=0.965
+                if infront > 0.965 && distance < min_distance
+                    min_distance = distance
+                end
+            end
+        end
+        
+        min_dist = round(min_distance,digits=3)
+        avoid_collision_speed = min_distance-(30 * infront) #L=13.2
+        avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
+        saved_speed = fetch(avoid_collision_channel)
+        if abs(saved_speed - avoid_collision_speed)>0.05
+            take!(avoid_collision_channel)
+            put!(avoid_collision_channel, avoid_collision_speed)
+        end
+
+        sleep(dt)
+        time_step=time_step+1
+    end
+end
+
+
 function decision_making(localization_state_channel, 
         perception_state_channel, 
         target_segment_channel,
+        avoid_collision_channel,
         shutdown_channel,
         map_segments, 
         socket)
@@ -562,7 +647,16 @@ function decision_making(localization_state_channel,
         fetch(shutdown_channel) && break
         target_segment = fetch(target_segment_channel)
         if target_segment > 0
+            avoid_collision_speed = fetch(avoid_collision_channel)
+
             latest_localization_state = fetch(localization_state_channel)
+
+            vel = latest_localization_state.velocity
+
+            veh_vel = vel[1:2]
+
+            curr_vel = norm(veh_vel)
+
             pos = latest_localization_state.position
             veh_pos = pos[1:2]
             if target_segment!=last_target_segment
@@ -681,8 +775,7 @@ function decision_making(localization_state_channel,
             end #if curr_vel > 0.0
             #latest_perception_state = fetch(perception_state_channel)  
 
-            target_vel = target_velocity(curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist)
-
+            target_vel = target_velocity(veh_pos, avoid_collision_speed, curr_vel, distance_to_target, stop_sign_alert, front_end_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist, perception_state_channel)
 
             cmd = (steering_angle, target_vel, true)
             steering_degree = round(steering_angle * 180 / 3.14, digits=3)
@@ -790,6 +883,12 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=true)
                       perception_state_channel, 
                       shutdown_channel))
     end
+
+    errormonitor(@async avoid_collision(localization_state_channel, 
+                           perception_state_channel,
+                           avoid_collision_channel,
+                           shutdown_channel
+                           ))
 
     errormonitor(@async decision_making(localization_state_channel, 
                            perception_state_channel, 
