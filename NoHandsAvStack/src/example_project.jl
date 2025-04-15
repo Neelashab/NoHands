@@ -1,31 +1,165 @@
+using Graphs
+using Rotations
+
+# constants
+BOUNDING_BOX = SVector(13.2, 5.7, 5.3)  
 
 struct MyLocalizationType
-    field1::Int
-    field2::Float64
+    time::Float64
+    position::SVector{3, Float64} # position of center of vehicle
+    quaternion::SVector{4, Float64} # quaternion [w, x, y, z]
+    velocity::SVector{3, Float64} # [vx, vy, vz]
+    angular_velocity::SVector{3, Float64} # [wx, wy, wz]
 end
 
+# update to include detailed state
+# i.e. vector of vehicle state (bounding boxes, velocity, heading, acceleration, etc.)
 struct MyPerceptionType
     field1::Int
     field2::Float64
 end
 
+function heading_to_quaternion(yaw::Float64)
+    # Assuming no roll/pitch, convert yaw → quaternion [w, x, y, z]
+    # Axis of rotation is [0, 0, 1] for yaw
+    half_yaw = yaw / 2
+    return SVector(cos(half_yaw), 0.0, 0.0, sin(half_yaw))  # [w, x, y, z]
+end
+
+# NOTE - this function is also defined in VehicleSim
+# Extract yaw from quaternion [w, x, y, z]
+function extract_yaw_from_quaternion(q::SVector{4, Float64})
+    atan(2(q[1]*q[4] + q[2]*q[3]), 1 - 2*(q[3]^2 + q[4]^2))
+end
+
+
 function localize(gps_channel, imu_channel, localization_state_channel)
-    # Set up algorithm / initialize variables
+
+    # WARM UP LOOP 
+    gps_buffer = []
+    start_time = time() 
+
+    while time() - start_time < 1.0
+        if isready(gps_channel)
+            push!(gps_buffer, take!(gps_channel))
+        end
+    end
+
+     # Estimate initial x, y, heading from GPS
+     init_x = mean([m.lat for m in gps_buffer])
+     init_y = mean([m.long for m in gps_buffer])
+     init_yaw = mean([m.heading for m in gps_buffer])
+     init_quat = heading_to_quaternion(init_yaw)
+
+     # Initialize state vector
+     state = @SVector [
+        init_x, init_y, 0.0, # position
+        init_quat[1], init_quat[2], init_quat[3], init_quat[4], # quaternion
+        0.0, 0.0, 0.0, # positional velocity
+        0.0, 0.0, 0.0 # angular velocity
+    ]
+
+    Σ = 0.1 * I(13) # initial covariance matrix
+    
+    Q = 0.01 * I(13) # TODO - customize process noise for each segment of vector
+    R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
+    R_imu = Diagonal([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]) # IMU noise
+
+    last_time = time()
+
+    # ENTER MAIN LOOP
     while true
         fresh_gps_meas = []
         while isready(gps_channel)
             meas = take!(gps_channel)
             push!(fresh_gps_meas, meas)
         end
+
         fresh_imu_meas = []
         while isready(imu_channel)
             meas = take!(imu_channel)
             push!(fresh_imu_meas, meas)
         end
-        
-        # process measurements
 
-        localization_state = MyLocalizationType(0,0.0)
+         # Use the most recent measurement from GPS and IMU
+         latest_gps = isempty(fresh_gps_meas) ? nothing : last(fresh_gps_meas)
+         latest_imu = isempty(fresh_imu_meas) ? nothing : last(fresh_imu_meas)
+ 
+         # Compute dt
+         now = time()
+         dt = now - last_time 
+         last_time = now
+
+
+        # PREDICT: Where should we be given the previous state and how we expect the car to move?
+        # TODO define motion model that accepts localization state and computes:
+            # predicted state = f(previous state, current controls, dt)
+            # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
+            # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
+
+            # jacobian of current state 
+            F = Jac_x_f(state, dt)
+
+            # where did EKF predict it would be given its previous state? 
+            predicted_ref = f(state, dt)
+
+            Σ = F * Σ * F' + Q
+
+
+        # CORRECT: Given new sensor measurements, how do we correct our prediction? 
+        # We balance both our prediction given motion model and the actual sensor measurement using Kalman Gain
+        # TODO define measurement model that accepts new GPS measurements and computes:
+            # measurement prediction = h(predicted state)
+            # y = difference between real measurement and predicted measurement (residual)
+            # Kalman gain = predicted covariance * H' * (H * predicted covariance * H' + R)^-1
+            # updated state = predicted state + Kalman gain * y
+            # updated covariance = (I - Kalman gain * H) * predicted covariance
+            #  you can reuse the g in the measurement model in measurements.jl, check to see what the state of x is
+
+            if latest_gps !== nothing
+                # actual measurement
+                z_gps = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
+
+                # actual measurement prediction 
+                z_gps_pred = h_gps(predicted_ref)
+
+                # residual 
+                y_gps = z_gps - z_gps_pred
+    
+                H_gps = Jac_h_gps(predicted_ref)
+                S_gps = H_gps * Σ * H_gps' + R_gps
+                K_gps = Σ * H_gps' * inv(S_gps)
+                
+                # updated state factoring in state prediction with Kalman gain 
+                predicted_state = predicted_ref + K * y_gps
+
+                # updated covariance
+                Σ = (I - K_gps * H_gps) * Σ
+            end
+
+            if latest_imu !== nothing
+                # same as GPS
+                z_imu = vcat(latest_imu.linear_vel, latest_imu.angular_vel)
+                z_imu_pred = h_imu(predicted_ref)
+                y_imu = z_imu - z_imu_pred
+    
+                H_imu = Jac_h_imu(predicted_ref)
+                S_imu = H_imu * Σ * H_imu' + R_imu
+                K_imu = Σ * H_imu' * inv(S_imu)
+    
+                predicted_state = predicted_ref + K_imu * y_imu
+                Σ = (I - K_imu * H_imu) * Σ
+            end
+    
+        # Publish relevant localization state
+        localization_state = MyLocalizationType(
+            now,
+            state[1:3], # positions
+            state[4:7], # quaternion
+            state[8:10], # linear velocity
+            state[11:13] # angular velocity
+        )
+
         if isready(localization_state_channel)
             take!(localization_state_channel)
         end
@@ -33,15 +167,7 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     end 
 end
 
-function iterative_closest_point(map_points, pointcloud, R, t; max_iters=10, visualize=false)
-end
 
-
-function update_point_associations!(point_associations, pointcloud, map_points, R, t)
-end
-
-function update_point_transform!(point_associations, pointcloud, map_points, R, t)
-end
 
 
 
@@ -69,10 +195,13 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             meas = take!(cam_meas_channel)
             push!(fresh_cam_meas, meas)
         end
+        # step 1 -> get piping done and populate perception channel
+        # for now you can do this with ground truth data
 
         latest_localization_state = fetch(localization_state_channel)
         
         # process bounding boxes / run ekf / do what you think is good
+
 
         perception_state = MyPerceptionType(0,0.0)
         if isready(perception_state_channel)
@@ -80,6 +209,15 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
         end
         put!(perception_state_channel, perception_state)
     end
+
+    # object tracking that runs EKF for other cars using camera measurements
+    # run EKF for each bounding box detected
+    # note -> all cars are the same size so you can cheat a bit (find in rendering code)
+    # just need to estimate position, velocity, heading and velocity (unknown state)
+    # known state 0> z component, length, width, height
+
+    # given bounding box, how do we estimate state? 
+    
 end
 
 function decision_making(localization_state_channel, 
@@ -146,6 +284,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444)
     imu_channel = Channel{IMUMeasurement}(32)
     cam_channel = Channel{CameraMeasurement}(32)
     gt_channel = Channel{GroundTruthMeasurement}(32)
+    # create an optional shut down channel to kill all threads once one fails
 
     #localization_state_channel = Channel{MyLocalizationType}(1)
     #perception_state_channel = Channel{MyPerceptionType}(1)
