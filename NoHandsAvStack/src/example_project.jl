@@ -66,44 +66,39 @@ end
 
 function perception(cam_meas_channel, gt_channel, perception_state_channel, shutdown_channel)
 
-    println("Perception function started!")
-
     next_id = 1
     tracks = TrackedObject[]
-    #perception_state = MyPerceptionType(0.0, next_id, tracks)
-    #put!(perception_state_channel, perception_state)
 
     try
         while true
-            #println("Loop iteration")
+
+            # CHANNELS
+            # collecting information from the channels
+            fresh_cam_meas = []
+            fresh_gt_meas = []
     
             if isready(shutdown_channel) && take!(shutdown_channel)
                 break
             end
 
-            # gather the needed information
-    
-            fresh_cam_meas = []
             while isready(cam_meas_channel)
                 #println("Received camera message")
                 meas = take!(cam_meas_channel)
                 push!(fresh_cam_meas, meas)
             end
-    
+     
             # this is to be replaced with localization
-            fresh_gt_meas = []
             while isready(gt_channel)
                 #println("Received GT message")
                 meas = take!(gt_channel)
                 push!(fresh_gt_meas, meas)
             end
     
-    
             if isempty(fresh_cam_meas) || isempty(fresh_gt_meas)
                 if !isopen(cam_meas_channel) && !isopen(gt_channel)
                     break
                 end
-                ## no new measurments , take a break
+                # take a break ; no new measurements
                 sleep(0.05)
                 continue
             end
@@ -114,26 +109,25 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
            
             if isempty(latest_cam.bounding_boxes)
                 # no bouding boxes yet, take a break
-                #println("No bounding boxes yet")
                 sleep(0.05)
                 continue
             end
+
+            # UNPACK INFROMATION FROM CHANNELS
     
             # unpack GT state (will become localization)
             ego_position = latest_gt.position
             ego_quaternion = latest_gt.orientation
     
-            # get transformation matrices
+            # create necessary transformation matrices
             camera_id = latest_cam.camera_id
             T_body_from_cam = VehicleSim.get_cam_transform(camera_id)
             T_cam_camrot = VehicleSim.get_rotated_camera_transform()
             T_body_camrot = VehicleSim.multiply_transforms(T_body_from_cam, T_cam_camrot)
             T_world_body = VehicleSim.get_body_transform(ego_quaternion, ego_position)
             T_world_camrot = VehicleSim.multiply_transforms(T_world_body, T_body_camrot)
-            #println("T_world_camrot: ", T_world_camrot)
-            #println("\n\n")
-
-    
+            
+            # unpack camera state
             focal_len = latest_cam.focal_length
             px_len = latest_cam.pixel_length
             img_w = latest_cam.image_width + 1
@@ -141,86 +135,43 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             t = latest_cam.time
             vehicle_size = SVector(13.2, 5.7, 5.3)
     
+            # for each bounding box (represnting other vehciles)
+            # create a location estimation from camera information
             for box in latest_cam.bounding_boxes
-                #println("hello?.")
+
                 u = (box[1] + box[3]) / 2
                 v = (box[2] + box[4]) / 2
                 x = (u - img_w / 2) * px_len
                 y = (v - img_h / 2) * px_len
 
-                uu = VehicleSim.convert_to_pixel(img_w, px_len, x)
-
-          
-
-                #pitch = atan2(-forward[2], norm(forward[[1, 3]]))
-                
-
-                # find center of bounding box 
-                # so the camera is on the top of the vehicle
-                # TODO: find exact adjacent_leg
-                    # will be how above the base/center is
-                # TODO: find angle camera is pointing alpha 
-                    # angle between the camera's optical axis and the direction to the center of the bounding box
-                # hypotnuse/depth = adjacent_leg / cos(alpha) 
-
-                # research -- 
-                    #  t_cam_to_body = [1.35, 1.7, 2.4]
-                    #  t_cam_to_body[2] = -1.7
-                # so for both cmaeras its 2.4 meters above the base 
-                
             
-                pitch = 0.02 - atan(y/focal_len) # 0.02 is the built in oiriginal tilt, add more andle 
-                # angle R_cam_to_body = RotY(0.02)
-                # alpha = 0.02 radians 
-
-                #R = T_world_camrot[1:3, 1:3]
-                #rad = atan((-R[3,1])/(sqrt(R[3,2]^2 + R[3,3]^2)))
-                #(pi/2 - 0.02)
+                pitch = 0.02 - atan(y/focal_len) # 0.02 is the built in oiriginal tilt, add more angle 
                 pitch_fixed = (pi/2 - pitch) 
-                
                 z = (2.4)/cos(pitch_fixed) # both camera 1 & 2 have a height of 2.4 above the base/center
             
-
-                # we know t_cam rot is basically the camera is respect to the world 
-                # if i drew a straight line from camera to ob until when does it hit a height of 2.5
-                # until the height of that staight line 
-
-                #@info "uu is $uu, u is $u"
-                
-                #z = focal_len
-                #depth = 7 0
-
-                #xx = x * z / focal_len
-                #yy = y * z / focal_len
                 
                 point_from_cam = SVector{4, Float64}(x, y, z, 1.0)
-
                 pos = T_world_camrot * point_from_cam
-
-                #@info "pos is $pos"
-                #@info "gt is $ego_position"
-                #@info "gt orientation is $ego_quaternion"
-
                 pos[3] = vehicle_size[3] / 2
-                #println("world position (before EFK): ", pos)
     
+                
                 matched = false
                 for (i, track) in enumerate(tracks)
                     dist = norm(track.pos[1:2] - pos[1:2])
+
+                    # if its within 15 meters, its porbably the same vehicle
                     if dist < 15
                        
                         Δt = t - track.time
-                        #vel_est = pos[1:3] - track.pos
                         updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
                         tracks[i] = updated_track
-                        #println("EFK Pos Estimate: ", updated_track.pos)
-                        #println("Vel: ", updated_track.vel)
                         matched = true
                         break
 
                     end
                 end
     
+                # if no exsisting track was matched, create a new one
                 if !matched
     
                     initial_orientation = track_orientation_estimate(
@@ -230,7 +181,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
                     initial_angular_velocity = SVector(0.0, 0.0, 0.0)
     
                     cov_diag = [
-                        5.0, 50.0, 1.0, 
+                        5.0, 50.0, 1.0,         # y-pos tends to be our most uncertain 
                         2.0, 2.0, 2.0, 2.0,
                         10.0, 10.0, 0.5,
                         10.0, 10.0, 0.5
@@ -251,7 +202,6 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
             end
     
             perception_state = MyPerceptionType(t, next_id, tracks)
-            #println("Pos: ", perception_state.tracked_objs[1].pos)
             put!(perception_state_channel, perception_state)
     
             sleep(0.05)
@@ -273,11 +223,10 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
     # compute heading of the ego vehicle
     # TODO: check if neelasha already has "finding heading logic" from her function
     ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
-    ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))  # 2D heading vector
 
     # compute how sideways teh object is from ego
     delta = obj_pos[1:2] - ego_pos[1:2]
-    lateral_offset = abs(det(hcat(ego_heading, delta)) / norm(ego_heading))
+    lateral_offset = abs(det(hcat(ego_yaw, delta)) / norm(ego_yaw))
 
     # decide orientation of the object
     if lateral_offset < lane_width / 2
@@ -321,8 +270,6 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
         * run EFK probability for updated track
 
     """
-
-    # creating state vector for the object
     # creating state vector for the object
     x = vcat(track.pos,                     # 1:3 position
              track.orientation,             # 4:7 orientation quaternion
@@ -330,11 +277,11 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
              track.angular_velocity)        # 11:13 angular velocity
 
     # setting up necessary noise matrices
-    R = Diagonal(@SVector [1.0, 15.0, 1.0])
-    # we trust x and y but not z 
+    R = Diagonal(@SVector [1.0, 15.0, 1.0])     # we trust x and z but not y 
+    
  
-    # TODO take data and calculate what noise is 
-    Q = I(13) * 10  # noise matrix # im not sure if i did this correctly 
+   
+    Q = I(13) * 10 
     P = track.P # covariance matrix of the object
     
     # predict the next state using the process model
