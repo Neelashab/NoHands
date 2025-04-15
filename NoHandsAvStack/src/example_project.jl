@@ -10,17 +10,6 @@ struct MyLocalizationType
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
-"""
-struct MyPerceptionType
-    vehicle_id::Int
-    position::SVector{3, Float64} # position of center of vehicle
-    orientation::SVector{4, Float64} # represented as quaternion
-    velocity::SVector{3, Float64}
-    angular_velocity::SVector{3, Float64} # angular velocity around x,y,z axes
-    size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
-end
-"""
-
 struct TrackedObject
     id::Int
     time::Float64
@@ -538,7 +527,7 @@ function target_velocity(
     else
         @info("stop sign not found")
     end 
-    
+
     target_vel = avoid_collision_speed < target_vel ? avoid_collision_speed : target_vel
 
     target_vel = target_vel < 0 ? 0 : target_vel
@@ -581,7 +570,7 @@ function avoid_collision(localization_state_channel,
 
 		#Rot_3D = Rot_from_quat(latest_localization_state.ori)
 
-        q = QuatRotation(latest_localization_state.ori)
+        q = QuatRotation(latest_localization_state.orientation)
         Rot_3D = Matrix(q)
 
 		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
@@ -775,7 +764,7 @@ function decision_making(localization_state_channel,
             end #if curr_vel > 0.0
             #latest_perception_state = fetch(perception_state_channel)  
 
-            target_vel = target_velocity(veh_pos, avoid_collision_speed, curr_vel, distance_to_target, stop_sign_alert, front_end_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist, perception_state_channel)
+            target_vel = target_velocity(veh_pos, avoid_collision_speed, curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist, perception_state_channel)
 
             cmd = (steering_angle, target_vel, true)
             steering_degree = round(steering_angle * 180 / 3.14, digits=3)
@@ -808,6 +797,8 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=true)
     perception_state_channel = Channel{MyPerceptionType}(1)
     target_segment_channel = Channel{Int}(1)
     ego_vehicle_id_channel = Channel{Int}(1)
+    avoid_collision_channel = Channel{Float64}(1)
+    put!(avoid_collision_channel, 10)#speed limit
     shutdown_channel = Channel{Bool}(1)
     put!(shutdown_channel, false)
 
@@ -893,6 +884,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=true)
     errormonitor(@async decision_making(localization_state_channel, 
                            perception_state_channel, 
                            target_segment_channel, 
+                           avoid_collision_channel,
                            shutdown_channel,
                            map_segments, 
                            socket))
