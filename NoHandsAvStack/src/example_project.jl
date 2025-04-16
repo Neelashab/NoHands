@@ -10,20 +10,13 @@ struct MyLocalizationType
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
-struct TrackedObject
-    id::Int
-    time::Float64
-    pos::SVector{3, Float64}  # x, y, z
-    orientation::SVector{4, Float64}
-    vel::SVector{3, Float64}  # vx, vy, vz
-    angular_velocity::SVector{3, Float64}
-    P::SMatrix{13,13,Float64} # covariance matrix
-end
-
 struct MyPerceptionType
-    time::Float64
-    next_id::Int
-    tracked_objs::Vector{TrackedObject}
+    vehicle_id::Int
+    position::SVector{3, Float64} # position of center of vehicle
+    orientation::SVector{4, Float64} # represented as quaternion
+    velocity::SVector{3, Float64}
+    angular_velocity::SVector{3, Float64} # angular velocity around x,y,z axes
+    size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
 function gt_state(gt)
@@ -561,6 +554,8 @@ function avoid_collision(localization_state_channel,
         fetch(shutdown_channel) && break
         avoid_collision_speed = 10
         latest_localization_state = fetch(localization_state_channel)
+        @info("localization info in avoid collision: $latest_localization_state")
+
 
 		# Rot_3D is Rotation Matrix in 3D
 		# When vehicle rotates on 2D with θ,
@@ -576,12 +571,18 @@ function avoid_collision(localization_state_channel,
 		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
 
 		new_perception_list = fetch(perception_state_channel)
+        @info("perception info in avoid collision: $new_perception_list")
         count = length(new_perception_list)
+        
+        min_distance = Inf 
+        in_front = 0.0
+
         if count >0
             for i=1:count
                 one_perception = new_perception_list[i]
                 displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
                 distance = norm(displacement)
+                @info("distance from other car = $distance")
                 #infront is projection of a unit vector on my vehicle orientation
                 # is the other car within 30 degrees of mine
                 infront = dot(displacement, veh_dir)/distance
@@ -637,6 +638,7 @@ function decision_making(localization_state_channel,
         target_segment = fetch(target_segment_channel)
         if target_segment > 0
             avoid_collision_speed = fetch(avoid_collision_channel)
+            @info("avoid_collision_speed = $avoid_collision_speed")
 
             latest_localization_state = fetch(localization_state_channel)
 
