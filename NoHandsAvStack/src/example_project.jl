@@ -18,6 +18,7 @@ struct MyLocalizationType
     size::SVector{3, Float64} # length, width, height of 3d bounding box centered at (position/orientation)
 end
 
+map_segments = VehicleSim.city_map()
 
 struct TrackedObject
     id::Int
@@ -33,6 +34,36 @@ struct MyPerceptionType
     time::Float64
     next_id::Int
     tracked_objs::Vector{TrackedObject}
+end
+
+function is_in_seg(pos, seg)
+    is_loading_zone = length(seg.lane_types) > 1 && seg.lane_types[2] == VehicleSim.loading_zone
+    i = is_loading_zone ? 3 : 2
+    A = seg.lane_boundaries[1].pt_a
+    B = seg.lane_boundaries[1].pt_b
+    C = seg.lane_boundaries[i].pt_a
+    D = seg.lane_boundaries[i].pt_b
+    min_x = min(A[1], B[1], C[1], D[1])
+    max_x = max(A[1], B[1], C[1], D[1])
+    min_y = min(A[2], B[2], C[2], D[2])
+    max_y = max(A[2], B[2], C[2], D[2])
+    min_x <= pos[1] <= max_x && min_y <= pos[2] <= max_y
+end
+
+function heading_to_quaternion(yaw::Float64)
+    half_yaw = yaw / 2
+    return SVector(cos(half_yaw), 0.0, 0.0, sin(half_yaw))  # [w, x, y, z]
+end
+
+
+function get_pos_seg_id(map_segments, pos)
+    seg_id = 0
+    for (id, seg) in map_segments
+        if is_in_seg(pos, seg)
+            seg_id = id
+        end
+    end
+    return seg_id
 end
 
 
@@ -217,16 +248,36 @@ end
 
 
 function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64})
-
+"""
+    back up use this more simple code if stuff starts acting out 
     lane_width = 10.0       # based on the city_map defintions in map.jl
 
     # compute heading of the ego vehicle
     # TODO: check if neelasha already has "finding heading logic" from her function
     ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
+    ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))  # 2D heading vector
 
     # compute how sideways teh object is from ego
     delta = obj_pos[1:2] - ego_pos[1:2]
-    lateral_offset = abs(det(hcat(ego_yaw, delta)) / norm(ego_yaw))
+    lateral_offset = abs(det(hcat(ego_heading, delta)) / norm(ego_heading))
+
+    if lateral_offset < lane_width * 1.5
+        # opposite lane = flipped heading
+        flipped_yaw = ego_yaw + π
+        return SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
+    else
+        return ego_quat
+    end
+    """
+
+    lane_width = 10.0       # based on the city_map defintions in map.jl
+
+    ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
+    ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))
+
+    # compute how sideways teh object is from ego
+    delta = obj_pos[1:2] - ego_pos[1:2]
+    lateral_offset = abs(det(hcat(ego_heading, delta)) / norm(ego_heading))
 
     # decide orientation of the object
     if lateral_offset < lane_width / 2
@@ -237,18 +288,28 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
         flipped_yaw = ego_yaw + π
         return SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
     else
-        # TODO: UPDATE THIS SECTION ( IF TIME )
-        # else 
-        # use function to find what segement the object is in
-        # use function to know what part of the lane the object is in (helps with dircetion)
-        # make heading guess based on the direction 
-        return ego_quat
-        ## ^^ TODO: this is a placeholder, need to implement the logic
+        seg_id = get_pos_seg_id(map_segments, obj_pos[1:2])
+        if haskey(map_segments, seg_id)
+            seg = map_segments[seg_id]
+            A = seg.lane_boundaries[1].pt_a
+            B = seg.lane_boundaries[1].pt_b
+            direction = B - A
+            direction /= norm(direction)
+            yaw = atan(direction[2], direction[1])
+            #@warn "Valid Yaw calculated: $seg_id"
+            return heading_to_quaternion(yaw)
+        else
+            # fall back is to asusme worst case the car is heading straight towards you 
+            vec_xy = ego_pos[1:2] - obj_pos[1:2]
+            yaw = atan(vec_xy[2], vec_xy[1])
 
-
+            return heading_to_quaternion(yaw)  #  fallback orientation
+        end
     end
-
 end
+
+
+
 
 function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
