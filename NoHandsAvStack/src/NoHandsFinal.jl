@@ -254,6 +254,7 @@ end
 
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
+    println("ENTERING PERCEPTION")
 
     next_id = 1
     tracks = TrackedObject[]
@@ -957,6 +958,7 @@ function target_velocity(
     target_vel = avoid_collision_speed < target_vel ? avoid_collision_speed : target_vel
 
     target_vel = target_vel < 0 ? 0 : target_vel
+    return target_vel
 
 end
 
@@ -981,6 +983,8 @@ function avoid_collision(localization_state_channel,
 
     #vehicle_size = SVector(13.2, 5.7, 5.3)
 
+    infront = 0.0
+    min_distance = Inf
     dt = 0.05
     time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
     while true
@@ -1007,7 +1011,7 @@ function avoid_collision(localization_state_channel,
         if count > 0
             for i = 1:count
                 one_perception = new_perception_list[i]
-                displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
+                displacement = one_perception.pos[1:2] - latest_localization_state.position[1:2]
                 distance = norm(displacement)
                 #infront is projection of a unit vector on my vehicle orientation
                 # is the other car within 30 degrees of mine
@@ -1034,176 +1038,181 @@ function avoid_collision(localization_state_channel,
 end
 
 
-function decision_making(localization_state_channel,
-    perception_state_channel,
+function decision_making(localization_state_channel, 
+    perception_state_channel, 
     target_segment_channel,
     avoid_collision_channel,
     shutdown_channel,
-    map_segments,
+    map_segments, 
     socket)
-    ls = 2.0
-    last_target_segment = 0
-    log_file = open("decision_making_log.txt", "a")
-    currTime = Dates.format(now(), "HH:MM:SS.s")
-    println(log_file, currTime)
+ls = 2.0
+last_target_segment = 0
+log_file = open("decision_making_log.txt", "a")
+currTime = Dates.format(now(), "HH:MM:SS.s")
+println(log_file, currTime)
 
-    poly = Polyline() #dummy polyline
-    poly_count = 0
-    poly_leaving = 0 # front wheel touch the end of this line
-    best_next = 0
-    max_signed_dist = 0.0
-    signed_dist = 0.0
-    target_location = [0.0, 0.0]
+poly = Polyline() #dummy polyline
+poly_count = 0
+poly_leaving = 0 # front wheel touch the end of this line
+best_next = 0
+max_signed_dist = 0.0
+signed_dist = 0.0
+target_location = [0.0,0.0]
 
-    # heuristic flags
-    found_stop_sign = false
-    stop_sign_location = [0.0, 0.0]
+# heuristic flags
+found_stop_sign = false
+stop_sign_location = [0.0,0.0]
 
-    while true
-        fetch(shutdown_channel) && break
+while true
+    fetch(shutdown_channel) && break
+    if isready(target_segment_channel)
         target_segment = fetch(target_segment_channel)
-        println("ENTERED DECISION MAKING")
-        if target_segment > 0
-            println("TARGET SEGMENT > 0")
-            avoid_collision_speed = fetch(avoid_collision_channel)
+    else
+        target_segment = 0
+    end
+    println("target_segment = $target_segment")
+    println("")
+    if target_segment > 0
+        avoid_collision_speed = fetch(avoid_collision_channel)
+        @info("avoid_collision_speed = $avoid_collision_speed")
 
-            latest_localization_state = fetch(localization_state_channel)
+        latest_localization_state = fetch(localization_state_channel)
 
-            vel = latest_localization_state.velocity
+        vel = latest_localization_state.velocity
 
-            veh_vel = vel[1:2]
+        veh_vel = vel[1:2]
 
-            curr_vel = norm(veh_vel)
+        curr_vel = norm(veh_vel)
 
-            pos = latest_localization_state.position
-            veh_pos = pos[1:2]
-            if target_segment != last_target_segment
-                currTime = Dates.format(now(), "HH:MM:SS.s")
-                println(log_file, currTime)
-                println("new target_segment= $target_segment")
-                target_location = get_center(target_segment, map_segments, target_segment)
-                println("target_location=$target_location")
-                poly = get_polyline(map_segments, veh_pos, target_segment)
-                println("poly=$poly")
-                poly_count = length(poly.segments)
-                biggest_dist_to_poly = 0.0
-                poly_leaving = 0
-                best_next = 0
-                max_signed_dist = 0.0
-                signed_dist = 0.0
-                last_target_segment = target_segment
-            end
-            ori = latest_localization_state.orientation
-            vel = latest_localization_state.velocity
-            a_vel = latest_localization_state.angular_velocity
-            size = BOUNDING_BOX
-            # Rot_3D is Rotation Matrix in 3D
-            # When vehicle rotates on 2D with θ,
-            # Rot_3D = [cos(θ)  -sin(θ)  0;
-            #           sin(θ)   cos(θ)  0;
-            #               0         0  1]
-            q = QuatRotation(ori)
-            Rot_3D = Matrix(q)
-            veh_vel = vel[1:2]
-            veh_dir = [Rot_3D[1, 1], Rot_3D[2, 1]] #cos(θ), sin(θ)
-            veh_len = size[1] #vehicle Length
-            veh_wid = size[2] #vehicle width
-            rear_wl = veh_pos - 0.5 * veh_len * veh_dir
-            front_end = veh_pos + 0.5 * veh_len * veh_dir
-            distance_to_target = norm(target_location - veh_pos)
-            distance_to_stop_sign = norm(stop_sign_location - front_end)
+        pos = latest_localization_state.position
+        veh_pos = pos[1:2]
+        if target_segment!=last_target_segment
+            currTime = Dates.format(now(), "HH:MM:SS.s")
+            println(log_file, currTime)
+            println("new target_segment= $target_segment")
+            target_location = get_center(target_segment, map_segments, target_segment)
+            println("target_location=$target_location")
+            poly = get_polyline(map_segments, veh_pos, target_segment)
+            println("poly=$poly")
+            poly_count = length(poly.segments)
+            biggest_dist_to_poly = 0.0
+            poly_leaving = 0
+            best_next = 0
+            max_signed_dist = 0.0
+            signed_dist = 0.0
+            last_target_segment = target_segment
+        end
+        ori = latest_localization_state.orientation
+        vel = latest_localization_state.velocity
+        a_vel = latest_localization_state.angular_velocity
+        size = BOUNDING_BOX
+        # Rot_3D is Rotation Matrix in 3D
+        # When vehicle rotates on 2D with θ,
+        # Rot_3D = [cos(θ)  -sin(θ)  0;
+        #           sin(θ)   cos(θ)  0;
+        #               0         0  1]
+        q = QuatRotation(ori)
+        Rot_3D = Matrix(q)
+        veh_vel = vel[1:2]
+        veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
+        veh_len = size[1] #vehicle Length
+        veh_wid = size[2] #vehicle width
+        rear_wl = veh_pos - 0.5 * veh_len * veh_dir 
+        front_end = veh_pos + 0.5 * veh_len * veh_dir 
+        distance_to_target = norm(target_location-veh_pos)
+        distance_to_stop_sign = norm(stop_sign_location-front_end)
 
-            curr_vel = norm(veh_vel)
-            print("tgt=$target_segment")
-            steering_angle = 0.0
+        curr_vel = norm(veh_vel)
+        print("tgt=$target_segment")
+        steering_angle = 0.0
 
-            if found_stop_sign == true && curr_vel < 0.08
-                found_stop_sign = false
-            end
+        if found_stop_sign == true && curr_vel < 0.08
+            found_stop_sign = false
+        end
 
-            if curr_vel > 0.0001
-                len0 = curr_vel * ls
-                min_diff = distance_to_target
-                three_after = poly_leaving + 3
-                three_after = three_after > poly_count ? poly_count : three_after
-                best_next = 0
-                #println("poly_leaving=$poly_leaving")
-                #println("three_after=$three_after")
-                for i = poly_leaving+1:three_after
-                    #println("i=$i")
-                    # this p2 is the same point as p1 of next poly segment
-                    # we cannot use p1, because vehicle starts from p1 of first poly segment
-                    try_point = poly.segments[i].p2 #here p2 is the same point as p1 of next poly segment
-
-                    if poly.segments[i].stop == 1
-                        found_stop_sign = true
-                        @info("polyline coordinate = $try_point, i=$i")
-                        stop_sign_location = try_point
-                        #distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
-                    end
-
-                    try_dist = norm(try_point - rear_wl)
-                    if try_dist < veh_len #front wheel touched poly line seg
-                        poly_leaving = i
-                        continue #too close
-                    end
-                    sign = signOfDot0(veh_dir, try_point - rear_wl)
-                    if sign > 0
-                        l = norm(try_point - rear_wl)
-                        diff = abs(l - len0)
-                        if diff < min_diff
-                            min_diff = diff
-                            best_next = i
-                        end
-                    end
-                end #for i = poly_leaving+1 : poly_count
-                #println("best_next=$best_next")
-                best_next = best_next > 0 ? best_next : poly_leaving + 1
-                best_next = best_next > poly_count ? poly_count : best_next
-                poly_next_seg = poly.segments[best_next]
-                #println("poly_next_seg=$poly_next_seg")
-                next_road = poly_next_seg.road
-                next_part = poly_next_seg.part
-                print(",poly=$poly_count")
-                if poly_leaving > 0 && poly_leaving <= best_next
-                    poly_leaving_seg = poly.segments[poly_leaving]
-                    #println("poly_leaving_seg=$poly_leaving_seg")
-                    leaving_road = poly_leaving_seg.road
-                    leaving_part = poly_leaving_seg.part
-                    print(",lv=$leaving_road($leaving_part),to=$next_road($next_part)")
-                    #print(",debug1")
-                    signed_dist = signed_distance(poly, veh_pos, poly_leaving, best_next)
-                    #print(",debugn")
-                    if abs(signed_dist) > abs(max_signed_dist)
-                        max_signed_dist = signed_dist
-                        println(log_file, "max_signed_dist=$max_signed_dist between lv=$leaving_road($leaving_part),to=$next_road($next_part)")
-                    end
-                else
-                    print(",lv=0(0),to=$next_road($next_part)")
+        if curr_vel > 0.0001
+            len0 = curr_vel * ls
+            min_diff = distance_to_target
+            three_after = poly_leaving + 3
+            three_after = three_after > poly_count ? poly_count : three_after
+            best_next = 0
+            #println("poly_leaving=$poly_leaving")
+            #println("three_after=$three_after")
+            for i = poly_leaving+1 : three_after
+                #println("i=$i")
+                # this p2 is the same point as p1 of next poly segment
+                # we cannot use p1, because vehicle starts from p1 of first poly segment
+                try_point = poly.segments[i].p2 #here p2 is the same point as p1 of next poly segment
+                
+                if poly.segments[i].stop == 1
+                    found_stop_sign = true
+                    @info("polyline coordinate = $try_point, i=$i")
+                    stop_sign_location = try_point
+                    #distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
                 end
-                print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
-                next_point = poly_next_seg.p2
-                distance_to_node = norm(next_point - rear_wl)
-                cos_alpha = dot(veh_dir, next_point - rear_wl) / norm(next_point - rear_wl)
-                cos_alpha = round(cos_alpha, digits=3) # three decimal place
-                alpha = acos(cos_alpha)
-                sin_alpha = sin(alpha)
-                left_or_right = left_right(veh_dir, next_point - rear_wl)
-                steering_angle = 0.75 * atan(2.0 * veh_len * sin_alpha * left_or_right, curr_vel * ls)
-            end #if curr_vel > 0.0
-            #latest_perception_state = fetch(perception_state_channel)  
 
-            target_vel = target_velocity(veh_pos, avoid_collision_speed, curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist, perception_state_channel)
+                try_dist = norm(try_point - rear_wl)
+                if try_dist < veh_len #front wheel touched poly line seg
+                    poly_leaving = i
+                    continue #too close
+                end
+                sign = signOfDot0(veh_dir, try_point - rear_wl)
+                if sign > 0
+                    l = norm(try_point - rear_wl)
+                    diff = abs(l - len0)
+                    if diff < min_diff
+                        min_diff = diff
+                        best_next = i
+                    end
+                end
+            end #for i = poly_leaving+1 : poly_count
+            #println("best_next=$best_next")
+            best_next = best_next > 0 ? best_next : poly_leaving+1
+            best_next = best_next > poly_count ? poly_count : best_next
+            poly_next_seg = poly.segments[best_next]
+            #println("poly_next_seg=$poly_next_seg")
+            next_road = poly_next_seg.road
+            next_part = poly_next_seg.part
+            print(",poly=$poly_count")
+            if poly_leaving > 0 && poly_leaving <= best_next
+                poly_leaving_seg = poly.segments[poly_leaving]
+                #println("poly_leaving_seg=$poly_leaving_seg")
+                leaving_road = poly_leaving_seg.road
+                leaving_part = poly_leaving_seg.part
+                print(",lv=$leaving_road($leaving_part),to=$next_road($next_part)")
+                #print(",debug1")
+                signed_dist = signed_distance(poly, veh_pos, poly_leaving, best_next)
+                #print(",debugn")
+                if abs(signed_dist) > abs(max_signed_dist)
+                    max_signed_dist = signed_dist
+                    println(log_file, "max_signed_dist=$max_signed_dist between lv=$leaving_road($leaving_part),to=$next_road($next_part)")
+                end
+            else
+                print(",lv=0(0),to=$next_road($next_part)")
+            end
+            print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
+            next_point = poly_next_seg.p2
+            distance_to_node = norm(next_point - rear_wl)
+            cos_alpha = dot(veh_dir, next_point - rear_wl)/norm(next_point-rear_wl)
+            cos_alpha = round(cos_alpha, digits=3) # three decimal place
+            alpha = acos(cos_alpha)
+            sin_alpha = sin(alpha)
+            left_or_right = left_right(veh_dir, next_point - rear_wl)
+            steering_angle = 0.75 * atan(2.0*veh_len*sin_alpha*left_or_right, curr_vel*ls)
+        end #if curr_vel > 0.0
+        #latest_perception_state = fetch(perception_state_channel)  
 
-            cmd = (steering_angle, target_vel, true)
-            steering_degree = round(steering_angle * 180 / 3.14, digits=3)
-            println(", str=$steering_degree, v=$curr_vel")
-            serialize(socket, cmd)
-        end #if target_segment > 0
-        sleep(0.05)
-    end#while true
-    close(log_file)
-end#function def
+        target_vel = target_velocity(veh_pos, avoid_collision_speed, curr_vel, distance_to_target, found_stop_sign, distance_to_stop_sign, steering_angle, a_vel[3], veh_wid, poly_count, best_next, signed_dist, perception_state_channel)
+
+        cmd = (steering_angle, target_vel, true)
+        steering_degree = round(steering_angle * 180 / 3.14, digits=3)
+        println(", str=$steering_degree, v=$curr_vel")
+        serialize(socket, cmd)
+    end #if target_segment > 0
+    sleep(0.05)
+end#while true
+close(log_file)
+end
 
 function isfull(ch::Channel)
     length(ch.data) ≥ ch.sz_max
