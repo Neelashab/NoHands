@@ -1,7 +1,7 @@
 using Graphs
 using Rotations
 using StaticArrays, LinearAlgebra, Statistics
-
+using Dates
 
 #include("measurements.jl")
 
@@ -21,10 +21,10 @@ end
 struct TrackedObject
     id::Int
     time::Float64
-    pos::SVector{3, Float64}  # x, y, z
-    orientation::SVector{4, Float64}
-    vel::SVector{3, Float64}  # vx, vy, vz
-    angular_velocity::SVector{3, Float64}
+    pos::SVector{3,Float64}  # x, y, z
+    orientation::SVector{4,Float64}
+    vel::SVector{3,Float64}  # vx, vy, vz
+    angular_velocity::SVector{3,Float64}
     P::SMatrix{13,13,Float64} # covariance matrix
 end
 
@@ -79,7 +79,7 @@ function Jac_h_imu(x; δ=1e-6)
 end
 
 function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
-    println("Entering localize")
+    println("ENTERING LOCALIZE")
     gps_buffer = VehicleSim.GPSMeasurement[]
 
     while length(gps_buffer) < 5
@@ -97,7 +97,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     init_yaw = mean([m.heading for m in gps_buffer])
     init_quat = heading_to_quaternion(init_yaw)
 
-     # Initialize state vector
+    # Initialize state vector
     state = @SVector [
         init_x, init_y, 0.0, # position
         init_quat[1], init_quat[2], init_quat[3], init_quat[4], # quaternion
@@ -109,20 +109,20 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     Σ = 0.1 * I(13) # initial covariance matrix
 
     Q = Diagonal([
-    0.01,   # x
-    0.01,   # y
-    0.0,    # z (hardcoded)
-    0.2,    # qw
-    0.2,    # qx
-    0.2,    # qy
-    0.2,    # qz
-    0.05,   # vx
-    0.05,   # vy
-    0.05,   # vz
-    0.1,    # wx
-    0.1,    # wy
-    0.1     # wz
-])
+        0.01,   # x
+        0.01,   # y
+        0.0,    # z (hardcoded)
+        0.2,    # qw
+        0.2,    # qx
+        0.2,    # qy
+        0.2,    # qz
+        0.05,   # vx
+        0.05,   # vy
+        0.05,   # vz
+        0.1,    # wx
+        0.1,    # wy
+        0.1     # wz
+    ])
 
 
     R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
@@ -167,37 +167,37 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         dt = now - last_time
         last_time = now
 
-         # PREDICT: Where should we be given the previous state and how we expect the car to move?
+        # PREDICT: Where should we be given the previous state and how we expect the car to move?
         # TODO define motion model that accepts localization state and computes:
-            # predicted state = f(previous state, current controls, dt)
-            # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
-            # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
+        # predicted state = f(previous state, current controls, dt)
+        # predicted covariance = F (jacobian of current state) * previous covariance * F' + Q
+        # * you can reuse the h in the measurement model in measurements.jl, check to see what the state of x is
 
         # jacobian of current state 
         F = VehicleSim.Jac_x_f(state, dt)
 
-         # where did EKF predict it would be given its previous state? 
+        # where did EKF predict it would be given its previous state? 
         predicted_ref = VehicleSim.f(state, dt)
 
         Σ = F * Σ * F' + Q
 
-         # CORRECT: Given new sensor measurements, how do we correct our prediction? 
+        # CORRECT: Given new sensor measurements, how do we correct our prediction? 
         # We balance both our prediction given motion model and the actual sensor measurement using Kalman Gain
         # TODO define measurement model that accepts new GPS measurements and computes:
-            # measurement prediction = h(predicted state)
-            # y = difference between real measurement and predicted measurement (residual)
-            # Kalman gain = predicted covariance * H' * (H * predicted covariance * H' + R)^-1
-            # updated state = predicted state + Kalman gain * y
-            # updated covariance = (I - Kalman gain * H) * predicted covariance
-            #  you can reuse the g in the measurement model in measurements.jl, check to see what the state of x is
-        
+        # measurement prediction = h(predicted state)
+        # y = difference between real measurement and predicted measurement (residual)
+        # Kalman gain = predicted covariance * H' * (H * predicted covariance * H' + R)^-1
+        # updated state = predicted state + Kalman gain * y
+        # updated covariance = (I - Kalman gain * H) * predicted covariance
+        #  you can reuse the g in the measurement model in measurements.jl, check to see what the state of x is
+
         predicted_state = predicted_ref
 
         if latest_gps !== nothing
             # actual measurement
             z_gps = @SVector [latest_gps.lat, latest_gps.long, latest_gps.heading]
 
-             # actual measurement prediction
+            # actual measurement prediction
             z_gps_pred = VehicleSim.h_gps(predicted_state)
 
             # residual
@@ -207,10 +207,10 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             S_gps = H_gps * Σ * H_gps' + R_gps
             K_gps = Σ * H_gps' * inv(S_gps)
 
-             # updated state factoring in state prediction with Kalman gain 
+            # updated state factoring in state prediction with Kalman gain 
             predicted_state = predicted_state + K_gps * y_gps
 
-             # updated covariance
+            # updated covariance
             Σ = (I - K_gps * H_gps) * Σ
         end
 
@@ -265,7 +265,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             # collecting information from the channels
             fresh_cam_meas = []
             fresh_localization_meas = []
-    
+
             if isready(shutdown_channel) && take!(shutdown_channel)
                 break
             end
@@ -275,14 +275,14 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
                 meas = take!(cam_meas_channel)
                 push!(fresh_cam_meas, meas)
             end
-     
+
             # this is to be replaced with localization
             while isready(localization_state_channel)
                 #println("Received GT message")
                 meas = take!(localization_state_channel)
                 push!(fresh_localization_meas, meas)
             end
-    
+
             if isempty(fresh_cam_meas) || isempty(fresh_localization_meas)
                 if !isopen(cam_meas_channel) && !isopen(localization_state_channel)
                     break
@@ -291,11 +291,11 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
                 sleep(0.05)
                 continue
             end
-    
+
             latest_cam = last(fresh_cam_meas)
             latest_localization = last(fresh_localization_meas)
 
-           
+
             if isempty(latest_cam.bounding_boxes)
                 # no bouding boxes yet, take a break
                 sleep(0.05)
@@ -303,11 +303,11 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             end
 
             # UNPACK INFROMATION FROM CHANNELS
-    
+
             # unpack GT state (will become localization)
             ego_position = latest_localization.position
             ego_quaternion = latest_localization.orientation
-    
+
             # create necessary transformation matrices
             camera_id = latest_cam.camera_id
             T_body_from_cam = VehicleSim.get_cam_transform(camera_id)
@@ -315,7 +315,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             T_body_camrot = VehicleSim.multiply_transforms(T_body_from_cam, T_cam_camrot)
             T_world_body = VehicleSim.get_body_transform(ego_quaternion, ego_position)
             T_world_camrot = VehicleSim.multiply_transforms(T_world_body, T_body_camrot)
-            
+
             # unpack camera state
             focal_len = latest_cam.focal_length
             px_len = latest_cam.pixel_length
@@ -323,7 +323,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             img_h = latest_cam.image_height + 1
             t = latest_cam.time
             vehicle_size = SVector(13.2, 5.7, 5.3)
-    
+
             # for each bounding box (represnting other vehciles)
             # create a location estimation from camera information
             for box in latest_cam.bounding_boxes
@@ -333,50 +333,50 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
                 x = (u - img_w / 2) * px_len
                 y = (v - img_h / 2) * px_len
 
-            
-                pitch = 0.02 - atan(y/focal_len) # 0.02 is the built in oiriginal tilt, add more angle 
-                pitch_fixed = (pi/2 - pitch) 
-                z = (2.4)/cos(pitch_fixed) # both camera 1 & 2 have a height of 2.4 above the base/center
-            
-                
-                point_from_cam = SVector{4, Float64}(x, y, z, 1.0)
+
+                pitch = 0.02 - atan(y / focal_len) # 0.02 is the built in oiriginal tilt, add more angle 
+                pitch_fixed = (pi / 2 - pitch)
+                z = (2.4) / cos(pitch_fixed) # both camera 1 & 2 have a height of 2.4 above the base/center
+
+
+                point_from_cam = SVector{4,Float64}(x, y, z, 1.0)
                 pos = T_world_camrot * point_from_cam
                 pos[3] = vehicle_size[3] / 2
-    
-                
+
+
                 matched = false
                 for (i, track) in enumerate(tracks)
                     dist = norm(track.pos[1:2] - pos[1:2])
 
                     # if its within 15 meters, its porbably the same vehicle
                     if dist < 15
-                       
+
                         Δt = t - track.time
-                        updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
+                        updated_track = ekf(track, SVector{3,Float64}(pos[1:3]), Δt)
                         tracks[i] = updated_track
                         matched = true
                         break
 
                     end
                 end
-    
+
                 # if no exsisting track was matched, create a new one
                 if !matched
-    
+
                     initial_orientation = track_orientation_estimate(
-                        ego_position, ego_quaternion, SVector{3, Float64}(pos[1:3]))
-    
+                        ego_position, ego_quaternion, SVector{3,Float64}(pos[1:3]))
+
                     initial_velocity = SVector(0.0, 0.0, 0.0)
                     initial_angular_velocity = SVector(0.0, 0.0, 0.0)
-    
+
                     cov_diag = [
                         5.0, 50.0, 1.0,         # y-pos tends to be our most uncertain 
                         2.0, 2.0, 2.0, 2.0,
                         10.0, 10.0, 0.5,
                         10.0, 10.0, 0.5
                     ]
-                    initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
-    
+                    initial_covariance = Diagonal(SVector{13,Float64}(cov_diag))
+
                     new_track = TrackedObject(
                         next_id, t, pos,
                         initial_orientation,
@@ -384,15 +384,15 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
                         initial_angular_velocity,
                         initial_covariance
                     )
-    
+
                     push!(tracks, new_track)
                     next_id += 1
                 end
             end
-    
+
             perception_state = MyPerceptionType(t, next_id, tracks)
             put!(perception_state_channel, perception_state)
-    
+
             sleep(0.05)
         end
     catch e
@@ -400,17 +400,51 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
         println(sprint(showerror, e))
     end
     println("Perception finished.")
-    
-end
-
-
-function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64})
-
-    #TODO: amina has to make a quick update to this
 
 end
 
-function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
+
+function track_orientation_estimate(ego_pos::SVector{3,Float64}, ego_quat::SVector{4,Float64}, obj_pos::SVector{3,Float64})
+
+    lane_width = 10.0       # based on the city_map defintions in map.jl
+
+    ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
+    ego_heading = SVector(cos(ego_yaw), sin(ego_yaw))
+
+    # compute how sideways teh object is from ego
+    delta = obj_pos[1:2] - ego_pos[1:2]
+    lateral_offset = abs(det(hcat(ego_heading, delta)) / norm(ego_heading))
+
+    # decide orientation of the object
+    if lateral_offset < lane_width / 2
+        # same lane = same heaidng
+        return ego_quat
+    elseif lateral_offset < lane_width * 1.5
+        # opposite lane = flipped heading
+        flipped_yaw = ego_yaw + π
+        return SVector(cos(flipped_yaw / 2), 0.0, 0.0, sin(flipped_yaw / 2))
+    else
+        seg_id = get_pos_seg_id(map_segments, obj_pos[1:2])
+        if haskey(map_segments, seg_id)
+            seg = map_segments[seg_id]
+            A = seg.lane_boundaries[1].pt_a
+            B = seg.lane_boundaries[1].pt_b
+            direction = B - A
+            direction /= norm(direction)
+            yaw = atan(direction[2], direction[1])
+            #@warn "Valid Yaw calculated: $seg_id"
+            return heading_to_quaternion(yaw)
+        else
+            # fall back is to asusme worst case the car is heading straight towards you 
+            vec_xy = ego_pos[1:2] - obj_pos[1:2]
+            yaw = atan(vec_xy[2], vec_xy[1])
+
+            return heading_to_quaternion(yaw)  #  fallback orientation
+        end
+    end
+end
+
+function ekf(track::TrackedObject, z::SVector{3,Float64}, Δt::Float64)
     """
     From measurement.jl:
         Jac_x_f(x, Δt) - returns the Jacobian matrix of the process model
@@ -432,25 +466,25 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
     # creating state vector for the object
     x = vcat(track.pos,                     # 1:3 position
-             track.orientation,             # 4:7 orientation quaternion
-             track.vel,                     # 8:10 velocity
-             track.angular_velocity)        # 11:13 angular velocity
+        track.orientation,             # 4:7 orientation quaternion
+        track.vel,                     # 8:10 velocity
+        track.angular_velocity)        # 11:13 angular velocity
 
     # setting up necessary noise matrices
     R = Diagonal(@SVector [1.0, 15.0, 1.0])     # we trust x and z but not y 
-    
- 
-   
-    Q = I(13) * 10 
+
+
+
+    Q = I(13) * 10
     P = track.P # covariance matrix of the object
-    
+
     # predict the next state using the process model
     # using the previous state and some motion model, we predict where the object should be now.
     # F will linearize the nonlinear motion function f(x, Δt) around the current estimate of the state
     F = VehicleSim.Jac_x_f(x, Δt)
     x_pred = VehicleSim.f(x, Δt)                       # recall that x is "previous" state
     P_pred = F * P * F' + Q
-   
+
 
     # finding the "actual state" using the measurement model
     # what actually ended up happening (use the position found by the camera)
@@ -458,7 +492,7 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     y = z - x_pred[1:3] # residual = actual_measurement - expected_measurement
     S = H * P_pred * H' + R
     K = P_pred * H' * inv(S)                # the Kalman gain, how trustworthy was our prediction? 
-                                            # kalman_gain = predicted_covariance * H' * inverse(residual_covariance)
+    # kalman_gain = predicted_covariance * H' * inverse(residual_covariance)
 
     # now with the kalman gain K we can update the state and covariance
     x_updated = x_pred + K * y              # updated_state = predicted_state + kalman_gain * residual
@@ -466,13 +500,13 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
 
     # build updated track structure
     ekf_updated_track = TrackedObject(track.id,
-                                      track.time + Δt,
-                                      x_updated[1:3], # position
-                                      x_updated[4:7], # orientation
-                                      x_updated[8:10], # velocity
-                                      x_updated[11:13], # angular velocity
-                                      P_updated)  # covariance matrix
-    
+        track.time + Δt,
+        x_updated[1:3], # position
+        x_updated[4:7], # orientation
+        x_updated[8:10], # velocity
+        x_updated[11:13], # angular velocity
+        P_updated)  # covariance matrix
+
     return ekf_updated_track
 end
 
@@ -488,60 +522,60 @@ function gt_perception(gt)
     MyPerceptionType(time(), 1, Vector{TrackedObject[]})
 end
 
-function process_gt(gt_channel,shutdown_channel, localization_state_channel, perception_state_channel, ego_vehicle_id_channel)
+function process_gt(gt_channel, shutdown_channel, localization_state_channel, perception_state_channel, ego_vehicle_id_channel)
 
-localization_initialized = false
-perception_initialized = false
-while true
-    try
-        fetch(shutdown_channel) && break
-        found_this_vehicle = false
-        found_other_vehicle = false
-        ego_vehicle_id = fetch(ego_vehicle_id_channel)
-        if ego_vehicle_id > 0
-            fresh_gt_meas = []
-            meas = fetch(gt_channel)
-            while meas.time > 0 && length(fresh_gt_meas)<10
-                take!(gt_channel)
-                push!(fresh_gt_meas, meas)
+    localization_initialized = false
+    perception_initialized = false
+    while true
+        try
+            fetch(shutdown_channel) && break
+            found_this_vehicle = false
+            found_other_vehicle = false
+            ego_vehicle_id = fetch(ego_vehicle_id_channel)
+            if ego_vehicle_id > 0
+                fresh_gt_meas = []
                 meas = fetch(gt_channel)
-            end
+                while meas.time > 0 && length(fresh_gt_meas) < 10
+                    take!(gt_channel)
+                    push!(fresh_gt_meas, meas)
+                    meas = fetch(gt_channel)
+                end
 
-            new_localization_state_from_gt = MyLocalizationType(
-                time(),zeros(3),zeros(4),zeros(3),zeros(3)
+                new_localization_state_from_gt = MyLocalizationType(
+                    time(), zeros(3), zeros(4), zeros(3), zeros(3)
                 )
 
-            new_perception_state_from_gt = []
-            gt_count = length(fresh_gt_meas)
-            for i=1:gt_count
-                if fresh_gt_meas[i].vehicle_id==ego_vehicle_id
-                    new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
-                    found_this_vehicle = true
-                else
-                    push!(new_perception_state_from_gt,gt_perception(fresh_gt_meas[i]))
-                    found_other_vehicle = true
+                new_perception_state_from_gt = []
+                gt_count = length(fresh_gt_meas)
+                for i = 1:gt_count
+                    if fresh_gt_meas[i].vehicle_id == ego_vehicle_id
+                        new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
+                        found_this_vehicle = true
+                    else
+                        push!(new_perception_state_from_gt, gt_perception(fresh_gt_meas[i]))
+                        found_other_vehicle = true
+                    end
+                end
+                if found_this_vehicle
+                    if localization_initialized
+                        take!(localization_state_channel)
+                    end
+                    put!(localization_state_channel, new_localization_state_from_gt)
+                    localization_initialized = true
+                end
+                if found_other_vehicle
+                    if perception_initialized
+                        take!(perception_state_channel)
+                    end
+                    put!(perception_state_channel, new_perception_state_from_gt)
+                    perception_initialized = true
                 end
             end
-            if found_this_vehicle
-                if localization_initialized
-                    take!(localization_state_channel)
-                end
-                put!(localization_state_channel, new_localization_state_from_gt)
-                localization_initialized = true
-            end
-            if found_other_vehicle
-                if perception_initialized
-                    take!(perception_state_channel)
-                end
-                put!(perception_state_channel, new_perception_state_from_gt)
-                perception_initialized = true
-            end
-        end            
-    catch
-        println("exception in process_gt")
+        catch
+            println("exception in process_gt")
+        end
+        sleep(0.05)
     end
-    sleep(0.05)
-end
 end
 
 
@@ -555,10 +589,10 @@ function perp(x)
 end
 
 struct StandardSegment <: PolylineSegment
-    p1::SVector{2, Float64}
-    p2::SVector{2, Float64}
-    tangent::SVector{2, Float64}
-    normal::SVector{2, Float64}
+    p1::SVector{2,Float64}
+    p2::SVector{2,Float64}
+    tangent::SVector{2,Float64}
+    normal::SVector{2,Float64}
     road::Int
     part::Int
     stop::Int
@@ -578,7 +612,7 @@ struct Polyline
         N = length(points)
         @assert N ≥ 2
         for i = 1:N-1
-            seg = StandardSegment(points[i], points[i+1],roads[i],parts[i], stops[i])
+            seg = StandardSegment(points[i], points[i+1], roads[i], parts[i], stops[i])
             push!(segments, seg)
         end
         new(segments)
@@ -607,13 +641,13 @@ end
 function signed_distance_standard(seg::StandardSegment, q)
     alpha0 = 0.0
     alpha1 = 1.0
-    dist0 = norm(alpha0*seg.p1 + (1.0 - alpha0)*seg.p2 - q)
-    dist1 = norm(alpha1*seg.p1 + (1.0 - alpha1)*seg.p2 - q)
-    while abs(alpha1 - alpha0) > 0.000001 || abs(dist0-dist1) > 0.000001
-        alpha = (alpha0+alpha1)/2.0
-        new_point = alpha*seg.p1 + (1.0 - alpha)*seg.p2
+    dist0 = norm(alpha0 * seg.p1 + (1.0 - alpha0) * seg.p2 - q)
+    dist1 = norm(alpha1 * seg.p1 + (1.0 - alpha1) * seg.p2 - q)
+    while abs(alpha1 - alpha0) > 0.000001 || abs(dist0 - dist1) > 0.000001
+        alpha = (alpha0 + alpha1) / 2.0
+        new_point = alpha * seg.p1 + (1.0 - alpha) * seg.p2
         diff = new_point - q
-        dist = norm(alpha*seg.p1 + (1.0 - alpha)*seg.p2 - q)
+        dist = norm(alpha * seg.p1 + (1.0 - alpha) * seg.p2 - q)
         if abs(dist1) < abs(dist0)
             dist0 = dist
             alpha0 = alpha
@@ -626,7 +660,7 @@ function signed_distance_standard(seg::StandardSegment, q)
     end
     # println("q=$q")
     # println("dist0=$dist0")
-    dist0 < 0.01 ? 0.0 : signOfDot1(seg.normal, q - seg.p1)*dist0
+    dist0 < 0.01 ? 0.0 : signOfDot1(seg.normal, q - seg.p1) * dist0
 end
 
 
@@ -682,7 +716,7 @@ function get_center(seg_id, map_segments, loading_id)
     B = seg.lane_boundaries[i].pt_b
     C = seg.lane_boundaries[i+1].pt_a
     D = seg.lane_boundaries[i+1].pt_b
-    MVector((A + B + C + D)/4)
+    MVector((A + B + C + D) / 4)
 end
 
 function get_loading_center(loading_id, map_segments)
@@ -719,7 +753,7 @@ function get_route(map_segments, start_position, target_id)
     for (parent_id, parent_seg) in map_segments
         parent_center = get_center(parent_id, map_segments, 0)
         no_child = length(parent_seg.children)
-        for j=1:no_child
+        for j = 1:no_child
             child_id = parent_seg.children[j]
             child_center = get_center(child_id, map_segments, 0)
             dist = norm(parent_center - child_center)
@@ -733,11 +767,11 @@ function get_route(map_segments, start_position, target_id)
     no_arc = Base.length(node1)
 
     graph = DiGraph(no_node)
-    for i=1:no_arc
+    for i = 1:no_arc
         add_edge!(graph, node1[i], node2[i])
     end
 
-    distmx = Inf*ones(no_node, no_node)
+    distmx = Inf * ones(no_node, no_node)
     for i in 1:no_arc
         distmx[node1[i], node2[i]] = dists[i]
     end
@@ -762,7 +796,7 @@ end
 function get_first_point(seg)
     A = seg.lane_boundaries[1].pt_a
     C = seg.lane_boundaries[2].pt_a
-    MVector((A + C)/2)
+    MVector((A + C) / 2)
 end
 
 """
@@ -784,14 +818,14 @@ function get_middle_point(seg)
     # println(io, "B=$B")
     # println(io, "C=$C")
     # println(io, "D=$D")
-    pt_a = (A+C)/2
-    pt_b = (B+D)/2
+    pt_a = (A + C) / 2
+    pt_b = (B + D) / 2
     # println(io, "pt_a=$pt_a")
     # println(io, "pt_b=$pt_b")
-    pt_m = (pt_a+pt_b)/2
+    pt_m = (pt_a + pt_b) / 2
     # println(io, "pt_m=$pt_m")
     delta = pt_b - pt_a
-    dist = norm(pt_b-pt_a)
+    dist = norm(pt_b - pt_a)
     # println(io, "dist=$dist")
     curvature1 = seg.lane_boundaries[1].curvature
     curvature2 = seg.lane_boundaries[2].curvature
@@ -802,7 +836,7 @@ function get_middle_point(seg)
     if curved1 && curved2
         rad1 = 1.0 / abs(curvature1)
         rad2 = 1.0 / abs(curvature2)
-        rad = (rad1+rad2)/2
+        rad = (rad1 + rad2) / 2
         # println(io, "rad=$rad")
         left = curvature1 > 0
         if left
@@ -822,9 +856,9 @@ function get_middle_point(seg)
         #convert mid point on chord to mid point on arc
         delta_to_center = pt_m - center
         # println(io, "delta_to_center=$delta_to_center")
-        direction_from_center = delta_to_center/norm(delta_to_center)
+        direction_from_center = delta_to_center / norm(delta_to_center)
         # println(io, "direction_from_center=$direction_from_center")
-        vector_from_center = rad*direction_from_center
+        vector_from_center = rad * direction_from_center
         # println(io, "vector_from_center=$vector_from_center")
         pt_m = center + vector_from_center
         add_mid_point = true
@@ -862,7 +896,7 @@ function get_polyline(map_segments, start_position, target_segment)
             push!(points, mid_point)
             push!(roads, route[r])
             push!(parts, 2)
-            
+
             push!(stops, 0)
         end
 
@@ -877,7 +911,7 @@ end
 
 function has_stop_sign(seg)
     yes_stop_sign = false
-    for i=1:length(seg.lane_types)
+    for i = 1:length(seg.lane_types)
         if seg.lane_types[i] == VehicleSim.stop_sign
             yes_stop_sign = true
         end
@@ -886,29 +920,29 @@ function has_stop_sign(seg)
 end
 
 function target_velocity(
-        veh_pos,
-        avoid_collision_speed,
-        current_velocity, 
-        distance_to_target,
-        found_stop_sign, 
-        distance_to_stop_sign,
-        steering_angle,
-        angular_velocity,
-        veh_wid, 
-        poly_count, 
-        best_next, 
-        signed_dist,
-        perception_state_channel; 
-        speed_limit=7)
-    
+    veh_pos,
+    avoid_collision_speed,
+    current_velocity,
+    distance_to_target,
+    found_stop_sign,
+    distance_to_stop_sign,
+    steering_angle,
+    angular_velocity,
+    veh_wid,
+    poly_count,
+    best_next,
+    signed_dist,
+    perception_state_channel;
+    speed_limit=7)
+
     target_vel = current_velocity + 0.5
-    angular_effect = abs(angular_velocity)+abs(steering_angle)
-    adjusted_limit = angular_effect > pi/2 ? 1.0 : (1.0+(speed_limit-1.0) * (1-2*angular_effect/pi))
+    angular_effect = abs(angular_velocity) + abs(steering_angle)
+    adjusted_limit = angular_effect > pi / 2 ? 1.0 : (1.0 + (speed_limit - 1.0) * (1 - 2 * angular_effect / pi))
     target_vel = target_vel > adjusted_limit ? adjusted_limit : target_vel
-    
+
     #slow down when vehicle approaches the target
     poly_count_down = poly_count - best_next
-    target_vel = poly_count_down < 2 && target_vel > poly_count_down ? (poly_count_down+1.5) : target_vel
+    target_vel = poly_count_down < 2 && target_vel > poly_count_down ? (poly_count_down + 1.5) : target_vel
     target_vel = poly_count_down < 1 && distance_to_target < veh_wid ? 0 : target_vel
 
     # slow to zero when vehicle approaches stop sign
@@ -918,7 +952,7 @@ function target_velocity(
         target_vel = min(target_vel, dist)
     else
         @info("stop sign not found")
-    end 
+    end
 
     target_vel = avoid_collision_speed < target_vel ? avoid_collision_speed : target_vel
 
@@ -940,73 +974,73 @@ end
 #when other vehicle is within my potential collision cone
 #the distance is the key to stop/slow myself
 #
-function avoid_collision(localization_state_channel, 
+function avoid_collision(localization_state_channel,
     perception_state_channel,
     avoid_collision_channel,
     shutdown_channel)
-    
+
     #vehicle_size = SVector(13.2, 5.7, 5.3)
 
-    dt = 0.05    
+    dt = 0.05
     time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
     while true
         fetch(shutdown_channel) && break
         avoid_collision_speed = 10
         latest_localization_state = fetch(localization_state_channel)
 
-		# Rot_3D is Rotation Matrix in 3D
-		# When vehicle rotates on 2D with θ,
-		# Rot_3D = [cos(θ)  -sin(θ)  0;
-		#           sin(θ)   cos(θ)  0;
-		#               0         0  1]
+        # Rot_3D is Rotation Matrix in 3D
+        # When vehicle rotates on 2D with θ,
+        # Rot_3D = [cos(θ)  -sin(θ)  0;
+        #           sin(θ)   cos(θ)  0;
+        #               0         0  1]
 
-		#Rot_3D = Rot_from_quat(latest_localization_state.ori)
+        #Rot_3D = Rot_from_quat(latest_localization_state.ori)
 
         q = QuatRotation(latest_localization_state.orientation)
         Rot_3D = Matrix(q)
 
-		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
+        veh_dir = [Rot_3D[1, 1], Rot_3D[2, 1]] #cos(θ), sin(θ)
 
         latest_perception_state = take!(perception_state_channel)
-		new_perception_list = latest_perception_state.tracked_objs
+        new_perception_list = latest_perception_state.tracked_objs
         count = length(new_perception_list)
-        if count >0
-            for i=1:count
+        if count > 0
+            for i = 1:count
                 one_perception = new_perception_list[i]
                 displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
                 distance = norm(displacement)
                 #infront is projection of a unit vector on my vehicle orientation
                 # is the other car within 30 degrees of mine
-                infront = dot(displacement, veh_dir)/distance
+                infront = dot(displacement, veh_dir) / distance
                 #within 30 degree cone means cos(15degree)=0.965
                 if infront > 0.965 && distance < min_distance
                     min_distance = distance
                 end
             end
         end
-        
-        min_dist = round(min_distance,digits=3)
-        avoid_collision_speed = min_distance-(30 * infront) #L=13.2
+
+        min_dist = round(min_distance, digits=3)
+        avoid_collision_speed = min_distance - (30 * infront) #L=13.2
         avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
         saved_speed = fetch(avoid_collision_channel)
-        if abs(saved_speed - avoid_collision_speed)>0.05
+        if abs(saved_speed - avoid_collision_speed) > 0.05
             take!(avoid_collision_channel)
             put!(avoid_collision_channel, avoid_collision_speed)
         end
 
         sleep(dt)
-        time_step=time_step+1
+        time_step = time_step + 1
     end
 end
 
 
-function decision_making(localization_state_channel, 
-        perception_state_channel, 
-        target_segment_channel,
-        avoid_collision_channel,
-        shutdown_channel,
-        map_segments, 
-        socket)
+function decision_making(localization_state_channel,
+    perception_state_channel,
+    target_segment_channel,
+    avoid_collision_channel,
+    shutdown_channel,
+    map_segments,
+    socket)
     ls = 2.0
     last_target_segment = 0
     log_file = open("decision_making_log.txt", "a")
@@ -1019,16 +1053,18 @@ function decision_making(localization_state_channel,
     best_next = 0
     max_signed_dist = 0.0
     signed_dist = 0.0
-    target_location = [0.0,0.0]
+    target_location = [0.0, 0.0]
 
     # heuristic flags
     found_stop_sign = false
-    stop_sign_location = [0.0,0.0]
+    stop_sign_location = [0.0, 0.0]
 
     while true
         fetch(shutdown_channel) && break
         target_segment = fetch(target_segment_channel)
+        println("ENTERED DECISION MAKING")
         if target_segment > 0
+            println("TARGET SEGMENT > 0")
             avoid_collision_speed = fetch(avoid_collision_channel)
 
             latest_localization_state = fetch(localization_state_channel)
@@ -1041,7 +1077,7 @@ function decision_making(localization_state_channel,
 
             pos = latest_localization_state.position
             veh_pos = pos[1:2]
-            if target_segment!=last_target_segment
+            if target_segment != last_target_segment
                 currTime = Dates.format(now(), "HH:MM:SS.s")
                 println(log_file, currTime)
                 println("new target_segment= $target_segment")
@@ -1069,13 +1105,13 @@ function decision_making(localization_state_channel,
             q = QuatRotation(ori)
             Rot_3D = Matrix(q)
             veh_vel = vel[1:2]
-            veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
+            veh_dir = [Rot_3D[1, 1], Rot_3D[2, 1]] #cos(θ), sin(θ)
             veh_len = size[1] #vehicle Length
             veh_wid = size[2] #vehicle width
-            rear_wl = veh_pos - 0.5 * veh_len * veh_dir 
-            front_end = veh_pos + 0.5 * veh_len * veh_dir 
-            distance_to_target = norm(target_location-veh_pos)
-            distance_to_stop_sign = norm(stop_sign_location-front_end)
+            rear_wl = veh_pos - 0.5 * veh_len * veh_dir
+            front_end = veh_pos + 0.5 * veh_len * veh_dir
+            distance_to_target = norm(target_location - veh_pos)
+            distance_to_stop_sign = norm(stop_sign_location - front_end)
 
             curr_vel = norm(veh_vel)
             print("tgt=$target_segment")
@@ -1093,12 +1129,12 @@ function decision_making(localization_state_channel,
                 best_next = 0
                 #println("poly_leaving=$poly_leaving")
                 #println("three_after=$three_after")
-                for i = poly_leaving+1 : three_after
+                for i = poly_leaving+1:three_after
                     #println("i=$i")
                     # this p2 is the same point as p1 of next poly segment
                     # we cannot use p1, because vehicle starts from p1 of first poly segment
                     try_point = poly.segments[i].p2 #here p2 is the same point as p1 of next poly segment
-                    
+
                     if poly.segments[i].stop == 1
                         found_stop_sign = true
                         @info("polyline coordinate = $try_point, i=$i")
@@ -1122,7 +1158,7 @@ function decision_making(localization_state_channel,
                     end
                 end #for i = poly_leaving+1 : poly_count
                 #println("best_next=$best_next")
-                best_next = best_next > 0 ? best_next : poly_leaving+1
+                best_next = best_next > 0 ? best_next : poly_leaving + 1
                 best_next = best_next > poly_count ? poly_count : best_next
                 poly_next_seg = poly.segments[best_next]
                 #println("poly_next_seg=$poly_next_seg")
@@ -1148,12 +1184,12 @@ function decision_making(localization_state_channel,
                 print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
                 next_point = poly_next_seg.p2
                 distance_to_node = norm(next_point - rear_wl)
-                cos_alpha = dot(veh_dir, next_point - rear_wl)/norm(next_point-rear_wl)
+                cos_alpha = dot(veh_dir, next_point - rear_wl) / norm(next_point - rear_wl)
                 cos_alpha = round(cos_alpha, digits=3) # three decimal place
                 alpha = acos(cos_alpha)
                 sin_alpha = sin(alpha)
                 left_or_right = left_right(veh_dir, next_point - rear_wl)
-                steering_angle = 0.75 * atan(2.0*veh_len*sin_alpha*left_or_right, curr_vel*ls)
+                steering_angle = 0.75 * atan(2.0 * veh_len * sin_alpha * left_or_right, curr_vel * ls)
             end #if curr_vel > 0.0
             #latest_perception_state = fetch(perception_state_channel)  
 
@@ -1179,7 +1215,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=false)
     # connect to simulation server & load map
     socket = Sockets.connect(host, port)
     map_segments = VehicleSim.city_map()
-    
+
     msg = deserialize(socket) # Visualization info
     @info msg
 
@@ -1227,7 +1263,6 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=false)
                 break
             end
         end
-        
 
         # populate map segment channel
         !received && continue
@@ -1268,45 +1303,44 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=false)
     # choose to use ground truth or localization
     if use_gt
         errormonitor(@async process_gt(gt_channel,
-                      shutdown_channel,
-                      localization_state_channel,
-                      perception_state_channel, 
-                      ego_vehicle_id_channel))
+            shutdown_channel,
+            localization_state_channel,
+            perception_state_channel,
+            ego_vehicle_id_channel))
     else
-        errormonitor(@async localize(gps_channel, 
-                    imu_channel, 
-                    localization_state_channel, 
-                    shutdown_channel))
+        errormonitor(@async localize(gps_channel,
+            imu_channel,
+            localization_state_channel,
+            shutdown_channel))
 
-        errormonitor(@async perception(cam_channel, 
-                      localization_state_channel, 
-                      perception_state_channel, 
-                      shutdown_channel))
+        errormonitor(@async perception(cam_channel,
+            localization_state_channel,
+            perception_state_channel,
+            shutdown_channel))
     end
 
-    errormonitor(@async avoid_collision(localization_state_channel, 
-                           perception_state_channel,
-                           avoid_collision_channel,
-                           shutdown_channel
-                           ))
-
-    errormonitor(@async decision_making(localization_state_channel, 
-                           perception_state_channel, 
-                           target_segment_channel, 
-                           avoid_collision_channel,
-                           shutdown_channel,
-                           map_segments, 
-                           socket))
+    errormonitor(@async avoid_collision(localization_state_channel,
+        perception_state_channel,
+        avoid_collision_channel,
+        shutdown_channel
+    ))
+    println("ENTERED CLIENT DECISION MAKING LOOP")
+    errormonitor(@async decision_making(localization_state_channel,
+        perception_state_channel,
+        target_segment_channel,
+        avoid_collision_channel,
+        shutdown_channel,
+        map_segments,
+        socket))
 end
 
 function shutdown_listener(shutdown_channel)
-    info_string = 
-        "***************
-      CLIENT COMMANDS
-      ***************
-            -Make sure focus is on this terminal window. Then:
-            -Press 'q' to shutdown threads. 
-    "
+    info_string = "***************
+                CLIENT COMMANDS
+                ***************
+                      -Make sure focus is on this terminal window. Then:
+                      -Press 'q' to shutdown threads. 
+              "
     @info info_string
     while true
         sleep(0.1)
