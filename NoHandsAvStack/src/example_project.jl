@@ -150,61 +150,55 @@ function signed_distance(polyline::Polyline, point, index_start, index_end)
 end
 
 function process_gt(
-        gt_channel,
-        shutdown_channel,
-        localization_state_channel,
-        perception_state_channel,
-        ego_vehicle_id_channel)
-
-    localization_initialized = false
-    perception_initialized = false
+    gt_channel,
+    shutdown_channel,
+    localization_state_channel,
+    perception_state_channel,
+    ego_vehicle_id_channel)
     while true
-        try
-            fetch(shutdown_channel) && break
-            found_this_vehicle = false
-            found_other_vehicle = false
-            ego_vehicle_id = fetch(ego_vehicle_id_channel)
-            if ego_vehicle_id > 0
-                fresh_gt_meas = []
+        fetch(shutdown_channel) && break
+        found_this_vehicle = false
+        found_other_vehicle = false
+        ego_vehicle_id = fetch(ego_vehicle_id_channel)
+        if ego_vehicle_id > 0
+            fresh_gt_meas = [] 
+            meas = fetch(gt_channel) # get messages from gt
+            while meas.time > 0 && length(fresh_gt_meas)<10 # if you get a meaningful message 
+                take!(gt_channel)
+                push!(fresh_gt_meas, meas)
                 meas = fetch(gt_channel)
-                while meas.time > 0 && length(fresh_gt_meas)<10
-                    take!(gt_channel)
-                    push!(fresh_gt_meas, meas)
-                    meas = fetch(gt_channel)
-                end
+            end
 
-                new_localization_state_from_gt = MyLocalizationType(
-                    0,zeros(3),zeros(4),zeros(3),zeros(3),zeros(3)
-                )
-                new_perception_state_from_gt = []
-                gt_count = length(fresh_gt_meas)
-                for i=1:gt_count
-                    if fresh_gt_meas[i].vehicle_id==ego_vehicle_id
-                        new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
-                        found_this_vehicle = true
-                    else
-                        push!(new_perception_state_from_gt,gt_perception(fresh_gt_meas[i]))
-                        found_other_vehicle = true
-                    end
+            new_localization_state_from_gt = MyLocalizationType(
+                0,zeros(3),zeros(4),zeros(3),zeros(3),zeros(3)
+            )
+            new_perception_list_from_gt = Vector{MyPerceptionType}(undef, 0)# it's Vector{MyPerceptionType} of all other vehicles
+            gt_count = length(fresh_gt_meas)
+            for i=1:gt_count
+                if fresh_gt_meas[i].vehicle_id==ego_vehicle_id
+                    new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
+                    found_this_vehicle = true
+                else
+                    one_perception = gt_perception(fresh_gt_meas[i])
+                    push!(new_perception_list_from_gt, one_perception)
+                    found_other_vehicle = true
                 end
-                if found_this_vehicle
-                    if localization_initialized
-                        take!(localization_state_channel)
-                    end
-                    put!(localization_state_channel, new_localization_state_from_gt)
-                    localization_initialized = true
+            end
+
+            if found_this_vehicle
+                if length(localization_state_channel.data)>=1
+                    take!(localization_state_channel)
                 end
-                if found_other_vehicle
-                    if perception_initialized
-                        take!(perception_state_channel)
-                    end
-                    put!(perception_state_channel, new_perception_state_from_gt)
-                    perception_initialized = true
+                put!(localization_state_channel, new_localization_state_from_gt)
+            end
+            if found_other_vehicle
+                if length(perception_state_channel.data)>=1
+                    take!(perception_state_channel)
                 end
-            end            
-        catch
-            println("exception in process_gt")
-        end
+                put!(perception_state_channel, new_perception_list_from_gt)
+            end
+        end            
+
         sleep(0.05)
     end
 end
@@ -550,11 +544,12 @@ function avoid_collision(localization_state_channel,
 
     dt = 0.05    
     time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
+    @info("starting collision thread")
     while true
         fetch(shutdown_channel) && break
         avoid_collision_speed = 10
         latest_localization_state = fetch(localization_state_channel)
-        @info("localization info in avoid collision: $latest_localization_state")
+        #println("localization info in avoid collision: $latest_localization_state")
 
 
 		# Rot_3D is Rotation Matrix in 3D
@@ -571,11 +566,11 @@ function avoid_collision(localization_state_channel,
 		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
 
 		new_perception_list = fetch(perception_state_channel)
-        @info("perception info in avoid collision: $new_perception_list")
+        #println("perception info in avoid collision: $new_perception_list")
         count = length(new_perception_list)
         
         min_distance = Inf 
-        in_front = 0.0
+        infront = 1
 
         if count >0
             for i=1:count
@@ -594,6 +589,9 @@ function avoid_collision(localization_state_channel,
         end
         
         min_dist = round(min_distance,digits=3)
+
+        println("minimum distance: $min_dist")
+
         avoid_collision_speed = min_distance-(30 * infront) #L=13.2
         avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
         saved_speed = fetch(avoid_collision_channel)
@@ -653,11 +651,11 @@ function decision_making(localization_state_channel,
             if target_segment!=last_target_segment
                 currTime = Dates.format(now(), "HH:MM:SS.s")
                 println(log_file, currTime)
-                println("new target_segment= $target_segment")
+                #println("new target_segment= $target_segment")
                 target_location = get_center(target_segment, map_segments, target_segment)
-                println("target_location=$target_location")
+                #println("target_location=$target_location")
                 poly = get_polyline(map_segments, veh_pos, target_segment)
-                println("poly=$poly")
+                #println("poly=$poly")
                 poly_count = length(poly.segments)
                 biggest_dist_to_poly = 0.0
                 poly_leaving = 0
@@ -687,7 +685,7 @@ function decision_making(localization_state_channel,
             distance_to_stop_sign = norm(stop_sign_location-front_end)
 
             curr_vel = norm(veh_vel)
-            print("tgt=$target_segment")
+            #print("tgt=$target_segment")
             steering_angle = 0.0
 
             if found_stop_sign == true && curr_vel < 0.08
@@ -710,7 +708,7 @@ function decision_making(localization_state_channel,
                     
                     if poly.segments[i].stop == 1
                         found_stop_sign = true
-                        @info("polyline coordinate = $try_point, i=$i")
+                        #@info("polyline coordinate = $try_point, i=$i")
                         stop_sign_location = try_point
                         #distance_to_stop_sign = norm(stop_sign_location-front_end) # need to recalc distance
                     end
@@ -737,13 +735,13 @@ function decision_making(localization_state_channel,
                 #println("poly_next_seg=$poly_next_seg")
                 next_road = poly_next_seg.road
                 next_part = poly_next_seg.part
-                print(",poly=$poly_count")
+                #print(",poly=$poly_count")
                 if poly_leaving > 0 && poly_leaving <= best_next
                     poly_leaving_seg = poly.segments[poly_leaving]
                     #println("poly_leaving_seg=$poly_leaving_seg")
                     leaving_road = poly_leaving_seg.road
                     leaving_part = poly_leaving_seg.part
-                    print(",lv=$leaving_road($leaving_part),to=$next_road($next_part)")
+                    #print(",lv=$leaving_road($leaving_part),to=$next_road($next_part)")
                     #print(",debug1")
                     signed_dist = signed_distance(poly, veh_pos, poly_leaving, best_next)
                     #print(",debugn")
@@ -754,7 +752,7 @@ function decision_making(localization_state_channel,
                 else
                     print(",lv=0(0),to=$next_road($next_part)")
                 end
-                print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
+                #print(",s_d=$signed_dist, max_s_d=$max_signed_dist")
                 next_point = poly_next_seg.p2
                 distance_to_node = norm(next_point - rear_wl)
                 cos_alpha = dot(veh_dir, next_point - rear_wl)/norm(next_point-rear_wl)
@@ -770,7 +768,7 @@ function decision_making(localization_state_channel,
 
             cmd = (steering_angle, target_vel, true)
             steering_degree = round(steering_angle * 180 / 3.14, digits=3)
-            println(", str=$steering_degree, v=$curr_vel")
+            #println(", str=$steering_degree, v=$curr_vel")
             serialize(socket, cmd)
         end #if target_segment > 0
         sleep(0.05)
@@ -796,7 +794,7 @@ function my_client(host::IPAddr=IPv4(0), port=4444; use_gt=true)
     gt_channel = Channel{GroundTruthMeasurement}(32)
 
     localization_state_channel = Channel{MyLocalizationType}(1)
-    perception_state_channel = Channel{MyPerceptionType}(1)
+    perception_state_channel = Channel{Vector{MyPerceptionType}}(1)
     target_segment_channel = Channel{Int}(1)
     ego_vehicle_id_channel = Channel{Int}(1)
     avoid_collision_channel = Channel{Float64}(1)
