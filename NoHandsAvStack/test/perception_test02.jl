@@ -26,8 +26,8 @@ Camera Set Up:
 filename = joinpath(@__DIR__, "02vehicle_moving_towards_stationary_ego.jld2")
 jldopen(filename, "r") do file
 buf = file["msg_buf"]
-println(buf[1])
-println(buf[2])
+#println(buf[1])
+#println(buf[2])
 
 gt_moving_car = GroundTruthMeasurement[]
 ego_cam = CameraMeasurement[]
@@ -47,7 +47,7 @@ for message in buf
     end
 end
 
-println(length(ego_cam))
+#println(length(ego_cam))
 #println(ego_cam[100])
 #println(ego_cam[100].bounding_boxes)
 
