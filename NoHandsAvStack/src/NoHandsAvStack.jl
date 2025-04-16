@@ -5,6 +5,6 @@ using Sockets
 using Serialization
 
 include("client.jl")
-include("example_project.jl")
+include("NoHandsFinal.jl")
 
 end # module NoHandsAvStack
