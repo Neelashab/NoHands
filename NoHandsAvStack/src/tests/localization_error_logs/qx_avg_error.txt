@@ -1,1 +1,1 @@
-Average error for qx: 0.3599227521552209
+Average error for qx: 0.3722998965859523

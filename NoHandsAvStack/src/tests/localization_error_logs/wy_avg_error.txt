@@ -1,1 +1,1 @@
-Average error for wy: 0.018020736822236077
+Average error for wy: 0.018940651938885417

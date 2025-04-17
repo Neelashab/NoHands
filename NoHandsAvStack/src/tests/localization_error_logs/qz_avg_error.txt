@@ -1,1 +1,1 @@
-Average error for qz: 0.3166849892032668
+Average error for qz: 0.5845846746093137

@@ -1,1 +1,1 @@
-Average error for qw: 0.2540075831802347
+Average error for qw: 0.3387113336490648

@@ -1,1 +1,1 @@
-Average error for y_pos: 2.5443301299007697
+Average error for y_pos: 2.1457909891068763

@@ -1,1 +1,1 @@
-Average error for yaw: 0.3348560430743051
+Average error for yaw: 0.18415298139189776

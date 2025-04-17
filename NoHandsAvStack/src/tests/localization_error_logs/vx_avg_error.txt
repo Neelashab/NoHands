@@ -1,1 +1,1 @@
-Average error for vx: 1.9622140545478615
+Average error for vx: 2.0725708717019407

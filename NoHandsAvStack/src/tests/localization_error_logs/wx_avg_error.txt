@@ -1,1 +1,1 @@
-Average error for wx: 0.017428771309608286
+Average error for wx: 0.01667387053319101

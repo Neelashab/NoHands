@@ -1,1 +1,1 @@
-Average error for z_pos: 0.006792711923239489
+Average error for z_pos: 0.006831045159265819

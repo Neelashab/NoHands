@@ -1,1 +1,1 @@
-Average error for vy: 0.18815329529046254
+Average error for vy: 0.21066527084224318

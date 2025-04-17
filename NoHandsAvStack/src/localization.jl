@@ -90,10 +90,10 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     0.01,   # x
     0.01,   # y
     0.0,    # z (hardcoded)
-    0.001,    # qw
-    0.001,    # qx
-    0.001,    # qy
-    0.001,    # qz
+    0.0,    # qw
+    0.0,    # qx
+    0.0,    # qy
+    0.0,    # qz
     0.05,   # vx
     0.05,   # vy
     0.05,   # vz (hardcoded)
@@ -103,7 +103,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
 ])
 
 
-    R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
+    R_gps = Diagonal([1.0, 1.0, 0.01]) # GPS noise
     R_imu = Diagonal([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]) # IMU noise
 
     last_time = gps_buffer[end].time  # use timestamp from last GPS warmup
@@ -217,8 +217,6 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             q_norm...,                           # normalized quaternion
             predicted_state[8:13]...             # velocities
         )
-
-
         # Publish relevant localization state
         localization_state = MyLocalizationType(
             now,
