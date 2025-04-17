@@ -615,58 +615,56 @@ end
 
 
 
-function process_gt(gt_channel, shutdown_channel, localization_state_channel, perception_state_channel, ego_vehicle_id_channel)
-
-    localization_initialized = false
-    perception_initialized = false
+function process_gt(
+    gt_channel,
+    shutdown_channel,
+    localization_state_channel,
+    perception_state_channel,
+    ego_vehicle_id_channel)
     while true
-        try
-            fetch(shutdown_channel) && break
-            found_this_vehicle = false
-            found_other_vehicle = false
-            ego_vehicle_id = fetch(ego_vehicle_id_channel)
-            if ego_vehicle_id > 0
-                fresh_gt_meas = []
+        fetch(shutdown_channel) && break
+        found_this_vehicle = false
+        found_other_vehicle = false
+        ego_vehicle_id = fetch(ego_vehicle_id_channel)
+        if ego_vehicle_id > 0
+            fresh_gt_meas = [] 
+            meas = fetch(gt_channel) # get messages from gt
+            while meas.time > 0 && length(fresh_gt_meas)<10 # if you get a meaningful message 
+                take!(gt_channel)
+                push!(fresh_gt_meas, meas)
                 meas = fetch(gt_channel)
-                while meas.time > 0 && length(fresh_gt_meas) < 10
-                    take!(gt_channel)
-                    push!(fresh_gt_meas, meas)
-                    meas = fetch(gt_channel)
-                end
+            end
 
-                new_localization_state_from_gt = MyLocalizationType(
-                    time(), zeros(3), zeros(4), zeros(3), zeros(3)
-                )
-
-                new_perception_state_from_gt = []
-                gt_count = length(fresh_gt_meas)
-                for i = 1:gt_count
-                    if fresh_gt_meas[i].vehicle_id == ego_vehicle_id
-                        new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
-                        found_this_vehicle = true
-                    else
-                        push!(new_perception_state_from_gt, gt_perception(fresh_gt_meas[i]))
-                        found_other_vehicle = true
-                    end
-                end
-                if found_this_vehicle
-                    if localization_initialized
-                        take!(localization_state_channel)
-                    end
-                    put!(localization_state_channel, new_localization_state_from_gt)
-                    localization_initialized = true
-                end
-                if found_other_vehicle
-                    if perception_initialized
-                        take!(perception_state_channel)
-                    end
-                    put!(perception_state_channel, new_perception_state_from_gt)
-                    perception_initialized = true
+            new_localization_state_from_gt = MyLocalizationType(
+                0,zeros(3),zeros(4),zeros(3),zeros(3),zeros(3)
+            )
+            new_perception_list_from_gt = Vector{MyPerceptionType}(undef, 0)# it's Vector{MyPerceptionType} of all other vehicles
+            gt_count = length(fresh_gt_meas)
+            for i=1:gt_count
+                if fresh_gt_meas[i].vehicle_id==ego_vehicle_id
+                    new_localization_state_from_gt = gt_state(fresh_gt_meas[i])
+                    found_this_vehicle = true
+                else
+                    one_perception = gt_perception(fresh_gt_meas[i])
+                    push!(new_perception_list_from_gt, one_perception)
+                    found_other_vehicle = true
                 end
             end
-        catch
-            println("exception in process_gt")
-        end
+
+            if found_this_vehicle
+                if length(localization_state_channel.data)>=1
+                    take!(localization_state_channel)
+                end
+                put!(localization_state_channel, new_localization_state_from_gt)
+            end
+            if found_other_vehicle
+                if length(perception_state_channel.data)>=1
+                    take!(perception_state_channel)
+                end
+                put!(perception_state_channel, new_perception_list_from_gt)
+            end
+        end            
+
         sleep(0.05)
     end
 end
@@ -1083,64 +1081,121 @@ end
 #when other vehicle is within my potential collision cone
 #the distance is the key to stop/slow myself
 #
-function avoid_collision(localization_state_channel,
+function avoid_collision(localization_state_channel, 
     perception_state_channel,
     avoid_collision_channel,
     shutdown_channel)
-
+    
     #vehicle_size = SVector(13.2, 5.7, 5.3)
 
-    infront = 0.0
-    min_distance = Inf
-    dt = 0.05
+    dt = 0.05    
     time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
+
+    deadlock_time_step = 0
+    intersections = [[16.67, 16.67], [16.67,130.0], [-96.67, 16.67]] # centerpoint of the 3 intersections
+
+    cos_half_angle = 0.965
+    safe_distance = 24 
+
+    println("starting collision thread")
     while true
         fetch(shutdown_channel) && break
         avoid_collision_speed = 10
         latest_localization_state = fetch(localization_state_channel)
+        println("localization info in avoid collision: $latest_localization_state")
 
-        # Rot_3D is Rotation Matrix in 3D
-        # When vehicle rotates on 2D with θ,
-        # Rot_3D = [cos(θ)  -sin(θ)  0;
-        #           sin(θ)   cos(θ)  0;
-        #               0         0  1]
 
-        #Rot_3D = Rot_from_quat(latest_localization_state.ori)
+		# Rot_3D is Rotation Matrix in 3D
+		# When vehicle rotates on 2D with θ,
+		# Rot_3D = [cos(θ)  -sin(θ)  0;
+		#           sin(θ)   cos(θ)  0;
+		#               0         0  1]
+
+		#Rot_3D = Rot_from_quat(latest_localization_state.ori)
 
         q = QuatRotation(latest_localization_state.orientation)
         Rot_3D = Matrix(q)
 
-        veh_dir = [Rot_3D[1, 1], Rot_3D[2, 1]] #cos(θ), sin(θ)
+		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
 
-        latest_perception_state = take!(perception_state_channel)
-        new_perception_list = latest_perception_state.tracked_objs
+        infront = 1
+
+        me_to_intersection = Inf
+        inter_idx = 0
+        for i = 1:3
+            dist = norm(intersections[i] - latest_localization_state.position[1:2])
+            if dist < me_to_intersection
+                me_to_intersection = dist
+                inter_idx = i
+            end
+        end
+
+        if me_to_intersection < 24
+            cos_half_angle = 0.707 #90 degree cone
+            safe_distance = 18
+        else
+            cos_half_angle = 0.965 #30 degree cone
+            safe_distance = 24
+        end
+
+        safe_distance = deadlock_time_step > 24 ? 18 : safe_distance # set to closer than 30 at intersection and during deadlocks
+
+		new_perception_list = fetch(perception_state_channel)
+        println("perception info in avoid collision: $new_perception_list")
         count = length(new_perception_list)
-        if count > 0
-            for i = 1:count
+        min_other_to_me = Inf
+        min_other_to_inter = Inf
+
+        if count >0
+            for i=1:count
                 one_perception = new_perception_list[i]
-                displacement = one_perception.pos[1:2] - latest_localization_state.position[1:2]
+                other_to_inter = norm(one_perception.position[1:2]-intersections[inter_idx])
+
+                displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
                 distance = norm(displacement)
+                @info("distance from other car = $distance")
                 #infront is projection of a unit vector on my vehicle orientation
                 # is the other car within 30 degrees of mine
-                infront = dot(displacement, veh_dir) / distance
-                #within 30 degree cone means cos(15degree)=0.965
-                if infront > 0.965 && distance < min_distance
-                    min_distance = distance
+                infront = dot(displacement, veh_dir)/distance
+                #within cone means cos(15degree)=0.965
+                #if the cosine is bigger, that means you are inside the cone
+                if infront > cos_half_angle && distance < min_other_to_me
+                    min_other_to_me = distance
+                    min_other_to_inter = other_to_inter
                 end
             end
         end
 
-        min_dist = round(min_distance, digits=3)
-        avoid_collision_speed = min_distance - (30 * infront) #L=13.2
-        avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
+        
+        min_dist = round(min_other_to_me,digits=3)
+
+        println("minimum distance: $min_dist")
+
+        avoid_collision_speed = min_other_to_me-(safe_distance * infront) #L=13.2
+        if me_to_intersection < 24
+            avoid_collision_speed = avoid_collision_speed > 2 ? 2 : avoid_collision_speed
+            if min_other_to_inter < me_to_intersection
+                avoid_collision_speed = avoid_collision_speed > 0.5 ? 0.5 : avoid_collision_speed
+            end
+        else
+            avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
+        end
+
+        if avoid_collision_speed < 0.01
+            deadlock_time_step = deadlock_time_step + 1
+        else
+            deadlock_time_step = 0
+        end
+
         saved_speed = fetch(avoid_collision_channel)
-        if abs(saved_speed - avoid_collision_speed) > 0.05
+
+        if abs(saved_speed - avoid_collision_speed)>0.05
             take!(avoid_collision_channel)
             put!(avoid_collision_channel, avoid_collision_speed)
         end
 
         sleep(dt)
-        time_step = time_step + 1
+        time_step=time_step+1
     end
 end
 
