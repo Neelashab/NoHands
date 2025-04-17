@@ -549,7 +549,7 @@ function avoid_collision(localization_state_channel,
     intersections = [[16.67, 16.67], [16.67,130.0], [-96.67, 16.67]] # centerpoint of the 3 intersections
 
     cos_half_angle = 0.965
-    safe_distance = 30 
+    safe_distance = 24 
 
     println("starting collision thread")
     while true
@@ -589,10 +589,10 @@ function avoid_collision(localization_state_channel,
             safe_distance = 18
         else
             cos_half_angle = 0.965 #30 degree cone
-            safe_distance = 30
+            safe_distance = 24
         end
 
-        safe_distance = deadlock_time_step > 30 ? 18 : safe_distance # set to closer than 30 at intersection and during deadlocks
+        safe_distance = deadlock_time_step > 24 ? 18 : safe_distance # set to closer than 30 at intersection and during deadlocks
 
 		new_perception_list = fetch(perception_state_channel)
         println("perception info in avoid collision: $new_perception_list")
