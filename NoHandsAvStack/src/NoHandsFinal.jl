@@ -211,6 +211,10 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             # residual
             y_gps = z_gps - z_gps_pred
 
+            # normalize the heading to be between -pi and pi
+            y_gps = SVector(y_gps[1], y_gps[2], mod(y_gps[3] + π, 2π) - π)
+
+
             H_gps = VehicleSim.Jac_h_gps(predicted_state)
             S_gps = H_gps * Σ * H_gps' + R_gps
             K_gps = Σ * H_gps' * inv(S_gps)
