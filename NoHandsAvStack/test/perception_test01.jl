@@ -5,6 +5,9 @@ using StaticArrays
 using Graphs
 using Rotations
 using Statistics
+using DataFrames
+using CSV
+
 
 
 
@@ -129,10 +132,20 @@ println("First ground truth timestamp: ", gt_stationary[1].time)
 println("First perception pos: ", perception_log[1].tracked_objs[1].pos)
 println("Last perception pos: ", perception_log[40].tracked_objs[1].pos) =#
 
+# Collection for Test results
 pos_errors = []
 vel_errors = []
 orientation_errors = []
 angular_velocity_errors = []
+
+# Colection for graph 
+time_gt = []
+x_gt = []
+y_gt = []
+time_est = []
+x_est = []
+y_est = []
+
 
 for state in perception_log
 
@@ -151,6 +164,14 @@ for state in perception_log
     m = matching_gt[1]
     obj = state.tracked_objs[1]
 
+    # Collect data for plotting
+    push!(time_gt, m.time)
+    push!(x_gt, m.position[1])
+    push!(y_gt, m.position[2])
+    push!(time_est, state.time)
+    push!(x_est, obj.pos[1])
+    push!(y_est, obj.pos[2])
+
     # Calculate errors
     pos_error = norm(obj.pos - m.position)
     vel_error = norm(obj.vel - m.velocity)
@@ -162,6 +183,7 @@ for state in perception_log
     push!(orientation_errors, orientation_error)
     push!(angular_velocity_errors, angular_velocity_error)
 
+    #=
     println("Perception Time = ", time)
     println("  GT Pos:      ", m.position)
     println("  Est Pos:      ", obj.pos)
@@ -170,7 +192,19 @@ for state in perception_log
     println("  Orientation error:", round(orientation_error, digits=3))
     println("  Angular vel error:", round(angular_velocity_error, digits=3))
     println()
+    =#
 end
+
+df_results = DataFrame(
+    time_gt_data = time_gt,
+    x_gt_data = x_gt,
+    y_gt_data = y_gt,
+    time_est_data = time_est,
+    x_est_data = x_est,
+    y_est_data = y_est
+)
+
+
 println("##### TEST 01 RESULTS")
 
 println("\nHow accurate was the perecption function in identifying the stationary vehicle?")
@@ -178,11 +212,14 @@ println("   Stationary Vehicle's true position: ", gt_stationary[1].position)
 println("   First position estimate: ", perception_log[1].tracked_objs[1].pos)
 println("   Final position estimate: ", perception_log[end].tracked_objs[1].pos)
 
+
 println("\nResult Stats")
 println("   Average position error: ", mean(pos_errors))
 println("   Median velocity error: ", median(vel_errors))
 println("   Median orientation error: ", median(orientation_errors))
 println("   Median angular velocity error: ", median(angular_velocity_errors))
 println("   Done comparing results")
+
+CSV.write("perception_results01.csv", df_results)
 
 end

@@ -176,9 +176,12 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
                 #R = T_world_camrot[1:3, 1:3]
                 #rad = atan((-R[3,1])/(sqrt(R[3,2]^2 + R[3,3]^2)))
                 #(pi/2 - 0.02)
-                pitch_fixed = (pi/2 - pitch) 
+                #pitch_fixed = (pi/2 - pitch) 
                 
-                z = (2.4)/cos(pitch_fixed) # both camera 1 & 2 have a height of 2.4 above the base/center
+               
+                max_angle = deg2rad(80.0)
+                pitch_fixed = clamp(π/2 - pitch, -max_angle, max_angle)
+                z = 2.4 / cos(pitch_fixed)
             
 
                 # we know t_cam rot is basically the camera is respect to the world 
@@ -204,58 +207,63 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
                 pos[3] = vehicle_size[3] / 2
                 #println("world position (before EFK): ", pos)
     
-                matched = false
-                for (i, track) in enumerate(tracks)
-                    dist = norm(track.pos[1:2] - pos[1:2])
-                    if dist < 15
-                       
-                        Δt = t - track.time
-                        #vel_est = pos[1:3] - track.pos
-                        updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
-                        tracks[i] = updated_track
-                        #println("EFK Pos Estimate: ", updated_track.pos)
-                        #println("Vel: ", updated_track.vel)
-                        matched = true
-                        break
+                
+                num_bounding_boxes = length(latest_cam.bounding_boxes)
+                num_tracks = length(tracks)
 
+
+                if num_tracks == 0 && num_bounding_boxes != 0
+                    while length(tracks) < num_bounding_boxes
+                        new_track = initialize_track(ego_position, ego_quaternion, SVector{3, Float64}(pos[1:3]), next_id, t)
+                        push!(tracks, new_track)
+                        next_id += 1
+                    end
+
+                else
+                    matched = false
+
+                    if num_bounding_boxes == num_tracks
+                        matched = true
+                    end
+
+                    if matched == true
+                        for(i, track) in enumerate(tracks)
+                            Δt = t - track.time
+                            updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
+                            tracks[i] = updated_track
+                        end
+                    else
+
+                        for (i, track) in enumerate(tracks)
+                            dist = norm(track.pos[1:2] - pos[1:2])
+                            println("dist: ", dist)
+                            if dist < 30
+                            
+                                Δt = t - track.time
+                                updated_track = ekf(track, SVector{3, Float64}(pos[1:3]), Δt)
+                                tracks[i] = updated_track
+                        
+                                matched = true
+                                break
+
+                            else
+                                new_track = TrackedObject
+                                new_track = initialize_track(ego_position, ego_quaternion, SVector{3, Float64}(pos[1:3]), next_id, t)
+                                push!(tracks, new_track)
+                                next_id += 1
+
+                            end
+                        end
                     end
                 end
     
-                if !matched
-    
-                    initial_orientation = track_orientation_estimate(
-                        ego_position, ego_quaternion, SVector{3, Float64}(pos[1:3]))
-    
-                    initial_velocity = SVector(0.0, 0.0, 0.0)
-                    initial_angular_velocity = SVector(0.0, 0.0, 0.0)
-    
-                    cov_diag = [
-                        5.0, 50.0, 1.0, 
-                        2.0, 2.0, 2.0, 2.0,
-                        10.0, 10.0, 0.5,
-                        10.0, 10.0, 0.5
-                    ]
-                    initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
-    
-                    new_track = TrackedObject(
-                        next_id, t, pos,
-                        initial_orientation,
-                        initial_velocity,
-                        initial_angular_velocity,
-                        initial_covariance
-                    )
-    
-                    push!(tracks, new_track)
-                    next_id += 1
-                end
-            end
-    
             perception_state = MyPerceptionType(t, next_id, tracks)
-            #println("Pos: ", perception_state.tracked_objs[1].pos)
+           
             put!(perception_state_channel, perception_state)
     
             sleep(0.05)
         end
+    end
     catch e
         println("ERROR in perception: ", e)
         println(sprint(showerror, e))
@@ -264,10 +272,8 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
     
 end
 
-
-
-function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64})
-
+function initialize_track(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64}, next_id::Int, t::Float64)
+    
     lane_width = 10.0       # based on the city_map defintions in map.jl
 
     ego_yaw = VehicleSim.extract_yaw_from_quaternion(ego_quat)
@@ -280,11 +286,11 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
     # decide orientation of the object
     if lateral_offset < lane_width / 2
         # same lane = same heaidng
-        return ego_quat
+        initial_orientation = ego_quat
     elseif lateral_offset < lane_width * 1.5
         # opposite lane = flipped heading
         flipped_yaw = ego_yaw + π
-        return SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
+        initial_orientation = SVector(cos(flipped_yaw/2), 0.0, 0.0, sin(flipped_yaw/2))
     else
         seg_id = get_pos_seg_id(map_segments, obj_pos[1:2])
         if haskey(map_segments, seg_id)
@@ -295,18 +301,41 @@ function track_orientation_estimate(ego_pos::SVector{3, Float64}, ego_quat::SVec
             direction /= norm(direction)
             yaw = atan(direction[2], direction[1])
             #@warn "Valid Yaw calculated: $seg_id"
-            return heading_to_quaternion(yaw)
+            initial_orientation = heading_to_quaternion(yaw)
         else
             # fall back is to asusme worst case the car is heading straight towards you 
             vec_xy = ego_pos[1:2] - obj_pos[1:2]
             yaw = atan(vec_xy[2], vec_xy[1])
 
-            return heading_to_quaternion(yaw)  #  fallback orientation
+            initial_orientation = heading_to_quaternion(yaw)  #  fallback orientation
         end
 
     end
 
+    initial_velocity = SVector(0.0, 0.0, 0.0)
+    initial_angular_velocity = SVector(0.0, 0.0, 0.0)
+
+    cov_diag = [
+            2.0, 2.0, 1.0, 
+            2.0, 2.0, 2.0, 2.0,
+            10.0, 10.0, 0.5,
+            10.0, 10.0, 0.5
+        ]
+    initial_covariance = Diagonal(SVector{13, Float64}(cov_diag))
+
+    new_track = TrackedObject(
+        next_id, t, obj_pos,
+        initial_orientation,
+        initial_velocity,
+        initial_angular_velocity,
+        initial_covariance
+    )
+
+    return new_track
+
 end
+
+
 
 function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
     """
@@ -337,11 +366,11 @@ function ekf(track::TrackedObject, z::SVector{3, Float64}, Δt::Float64)
              track.angular_velocity)        # 11:13 angular velocity
 
     # setting up necessary noise matrices
-    R = Diagonal(@SVector [1.0, 15.0, 1.0])
+    R = Diagonal(@SVector [1.75, 3.0, 1.0])
     # we trust x and y but not z 
  
     # TODO take data and calculate what noise is 
-    Q = I(13) * 10  # noise matrix # im not sure if i did this correctly 
+    Q = I(13) * 5.5
     P = track.P # covariance matrix of the object
     
     # predict the next state using the process model
