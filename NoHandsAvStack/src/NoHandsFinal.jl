@@ -34,6 +34,14 @@ struct MyPerceptionType
     tracked_objs::Vector{TrackedObject}
 end
 
+""" GROUND TRUTH SUPPORT """
+function gt_state(gt)
+    MyLocalizationType(time(), gt.position, gt.orientation, gt.velocity, gt.angular_velocity)
+end
+
+function gt_perception(gt)
+    MyPerceptionType(time(), 1, Vector{TrackedObject[]})
+end
 
 
 """ LOCALIZATION """
@@ -112,10 +120,10 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         0.01,   # x
         0.01,   # y
         0.0,    # z (hardcoded)
-        0.001,    # qw
-        0.001,    # qx
-        0.001,    # qy
-        0.001,    # qz
+        1.0,    # qw
+        1.0,    # qx
+        1.0,    # qy
+        1.0,    # qz
         0.05,   # vx
         0.05,   # vy
         0.05,   # vz (hardcoded)
@@ -123,9 +131,9 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         0.1,    # wy
         0.1     # wz
     ])
-
-
-    R_gps = Diagonal([1.0, 1.0, 0.1]) # GPS noise
+    
+    
+    R_gps = Diagonal([1.0, 1.0, 0.0005]) # GPS noise
     R_imu = Diagonal([0.001, 0.001, 0.001, 0.001, 0.001, 0.001]) # IMU noise
 
     last_time = gps_buffer[end].time  # use timestamp from last GPS warmup
@@ -470,6 +478,7 @@ function perception(cam_meas_channel, gt_channel, perception_state_channel, shut
     
 end
 
+
 function initialize_track(ego_pos::SVector{3, Float64}, ego_quat::SVector{4, Float64}, obj_pos::SVector{3, Float64}, next_id::Int, t::Float64)
     
     lane_width = 10.0       # based on the city_map defintions in map.jl
@@ -605,14 +614,6 @@ end
 
 
 
-""" GROUND TRUTH SUPPORT """
-function gt_state(gt)
-    MyLocalizationType(time(), gt.position, gt.orientation, gt.velocity, gt.angular_velocity)
-end
-
-function gt_perception(gt)
-    MyPerceptionType(time(), 1, Vector{TrackedObject[]})
-end
 
 function process_gt(gt_channel, shutdown_channel, localization_state_channel, perception_state_channel, ego_vehicle_id_channel)
 
@@ -730,6 +731,24 @@ function signOfDot0(a, b)
     end
 end
 
+function signOfDot1(a, b)
+    #println("in signOfDot1 a=$a, b=$b")
+    dot_prod = dot(a, b)
+    #println("in signOfDot1 dot_prod=$dot_prod")
+    if dot_prod > 0
+        return 1.0
+    elseif dot_prod < 0
+        return -1.0
+    else
+        return 1.0 
+    end
+end
+
+function left_right(v_direction, target_direction)
+    v_normal = [-v_direction[2], v_direction[1]]
+    return signOfDot0(v_normal, target_direction)
+end
+
 function signed_distance_standard(seg::StandardSegment, q)
     alpha0 = 0.0
     alpha1 = 1.0
@@ -755,11 +774,6 @@ function signed_distance_standard(seg::StandardSegment, q)
     dist0 < 0.01 ? 0.0 : signOfDot1(seg.normal, q - seg.p1) * dist0
 end
 
-
-function left_right(v_direction, target_direction)
-    v_normal = [-v_direction[2], v_direction[1]]
-    return signOfDot0(v_normal, target_direction)
-end
 
 
 """
