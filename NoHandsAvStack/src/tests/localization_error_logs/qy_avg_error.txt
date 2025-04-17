@@ -1,0 +1,1 @@
+Average error for qy: 0.3691295584656307

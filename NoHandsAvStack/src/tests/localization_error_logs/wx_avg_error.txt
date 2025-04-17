@@ -1,0 +1,1 @@
+Average error for wx: 0.017428771309608286

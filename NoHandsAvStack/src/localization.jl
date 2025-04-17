@@ -77,7 +77,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
 
      # Initialize state vector
     state = @SVector [
-        init_x, init_y, 0.0, # position
+        init_x, init_y, 2.6455622444987412, # position
         init_quat[1], init_quat[2], init_quat[3], init_quat[4], # quaternion
         0.0, 0.0, 0.0, # positional velocity
         0.0, 0.0, 0.0 # angular velocity
@@ -90,13 +90,13 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     0.01,   # x
     0.01,   # y
     0.0,    # z (hardcoded)
-    0.2,    # qw
-    0.2,    # qx
-    0.2,    # qy
-    0.2,    # qz
+    0.001,    # qw
+    0.001,    # qx
+    0.001,    # qy
+    0.001,    # qz
     0.05,   # vx
     0.05,   # vy
-    0.05,   # vz
+    0.05,   # vz (hardcoded)
     0.1,    # wx
     0.1,    # wy
     0.1     # wz
@@ -209,13 +209,22 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         end
 
         state = predicted_state
+        # Normalize quaternion and rebuild full state
+        q_norm = normalize(state[4:7])
+        state = SVector{13, Float64}(
+            predicted_state[1:2]...,             # x, y
+            2.6455622444987412,                  # hardcoded z
+            q_norm...,                           # normalized quaternion
+            predicted_state[8:13]...             # velocities
+        )
+
 
         # Publish relevant localization state
         localization_state = MyLocalizationType(
             now,
-            [state[1], state[2], 2.6455622444987412], # hardcode Z value as 2.5
-            normalize(state[4:7]),
-            [state[8], state[9], 0.0],
+            state[1:3],
+            state[4:7],
+            state[8:10],
             state[11:13]
         )
 

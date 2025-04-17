@@ -1,0 +1,1 @@
+Average error for wz: 0.07832350520661353
