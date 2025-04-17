@@ -544,19 +544,12 @@ function avoid_collision(localization_state_channel,
 
     dt = 0.05    
     time_step = 1 # Int won't cause overflow. Steps in 4 hour = 4*60*60/dt = 288000
-
-    deadlock_time_step = 0
-    intersections = [[16.67, 16.67], [16.67,130.0], [-96.67, 16.67]] # centerpoint of the 3 intersections
-
-    cos_half_angle = 0.965
-    safe_distance = 24 
-
-    println("starting collision thread")
+    @info("starting collision thread")
     while true
         fetch(shutdown_channel) && break
         avoid_collision_speed = 10
         latest_localization_state = fetch(localization_state_channel)
-        println("localization info in avoid collision: $latest_localization_state")
+        #println("localization info in avoid collision: $latest_localization_state")
 
 
 		# Rot_3D is Rotation Matrix in 3D
@@ -572,77 +565,36 @@ function avoid_collision(localization_state_channel,
 
 		veh_dir = [Rot_3D[1,1],Rot_3D[2,1]] #cos(θ), sin(θ)
 
-        infront = 1
-
-        me_to_intersection = Inf
-        inter_idx = 0
-        for i = 1:3
-            dist = norm(intersections[i] - latest_localization_state.position[1:2])
-            if dist < me_to_intersection
-                me_to_intersection = dist
-                inter_idx = i
-            end
-        end
-
-        if me_to_intersection < 24
-            cos_half_angle = 0.707 #90 degree cone
-            safe_distance = 18
-        else
-            cos_half_angle = 0.965 #30 degree cone
-            safe_distance = 24
-        end
-
-        safe_distance = deadlock_time_step > 24 ? 18 : safe_distance # set to closer than 30 at intersection and during deadlocks
-
 		new_perception_list = fetch(perception_state_channel)
-        println("perception info in avoid collision: $new_perception_list")
+        #println("perception info in avoid collision: $new_perception_list")
         count = length(new_perception_list)
-        min_other_to_me = Inf
-        min_other_to_inter = Inf
+        
+        min_distance = Inf 
+        infront = 1
 
         if count >0
             for i=1:count
                 one_perception = new_perception_list[i]
-                other_to_inter = norm(one_perception.position[1:2]-intersections[inter_idx])
-
                 displacement = one_perception.position[1:2] - latest_localization_state.position[1:2]
                 distance = norm(displacement)
                 @info("distance from other car = $distance")
                 #infront is projection of a unit vector on my vehicle orientation
                 # is the other car within 30 degrees of mine
                 infront = dot(displacement, veh_dir)/distance
-                #within cone means cos(15degree)=0.965
-                #if the cosine is bigger, that means you are inside the cone
-                if infront > cos_half_angle && distance < min_other_to_me
-                    min_other_to_me = distance
-                    min_other_to_inter = other_to_inter
+                #within 30 degree cone means cos(15degree)=0.965
+                if infront > 0.965 && distance < min_distance
+                    min_distance = distance
                 end
             end
         end
-
         
-        min_dist = round(min_other_to_me,digits=3)
+        min_dist = round(min_distance,digits=3)
 
         println("minimum distance: $min_dist")
 
-        avoid_collision_speed = min_other_to_me-(safe_distance * infront) #L=13.2
-        if me_to_intersection < 24
-            avoid_collision_speed = avoid_collision_speed > 2 ? 2 : avoid_collision_speed
-            if min_other_to_inter < me_to_intersection
-                avoid_collision_speed = avoid_collision_speed > 0.5 ? 0.5 : avoid_collision_speed
-            end
-        else
-            avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
-        end
-
-        if avoid_collision_speed < 0.01
-            deadlock_time_step = deadlock_time_step + 1
-        else
-            deadlock_time_step = 0
-        end
-
+        avoid_collision_speed = min_distance-(30 * infront) #L=13.2
+        avoid_collision_speed = avoid_collision_speed > 10 ? 10 : avoid_collision_speed
         saved_speed = fetch(avoid_collision_channel)
-
         if abs(saved_speed - avoid_collision_speed)>0.05
             take!(avoid_collision_channel)
             put!(avoid_collision_channel, avoid_collision_speed)
