@@ -1,0 +1,177 @@
+---
+title: "Lab 2: Prompt Engineering"
+author: "Amina Irizarry"
+date: "`r format(Sys.time(), 'Compiled %X on %A, %B %d, %Y')`"
+output: pdf_document
+header-includes:
+  - \usepackage{fvextra}
+  - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+---
+  
+  
+  
+```{r, echo = TRUE, eval = TRUE, comment = NA, warning = FALSE, message = FALSE}
+# Load packages
+library(tidyverse)
+library(ggplot2) 
+library(dplyr)
+library(grid)    # for arrows
+library(viridis) # for color scale
+
+
+```
+
+Loading the data
+
+```{r, echo = TRUE, eval = TRUE, comment = NA, warning = FALSE, message = FALSE}
+data01 <- read.csv("perception_results01.csv")
+data_side_by_sie <- read.csv("perception_results03.csv")
+circle <- read.csv("circle.csv")
+```
+
+*Perception Test 01*
+  The ego is driving up to a stationary vehicle
+  
+```{r, echo = TRUE, eval = TRUE, comment = NA, warning = FALSE, message = FALSE}
+
+# X Position
+ggplot(data = data01) +
+  geom_line(aes(x = time_gt_data, y = x_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = x_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "X Position", color = "Legend") +
+  theme_minimal() + theme(
+    axis.text.x = element_blank()  # removes the numbers
+  )
+
+# Y Position
+ggplot(data = data01) +
+  geom_line(aes(x = time_gt_data, y = y_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = y_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "Y Position", color = "Legend") +
+  theme_minimal() + theme(
+    axis.text.x = element_blank()  # removes the numbers
+  )
+
+
+```
+
+*Perception Test 02*
+  Two cars are driving next to each other in parallel
+
+```{r, echo = TRUE, eval = TRUE, comment = NA, warning = FALSE, message = FALSE}
+
+# X Position
+ggplot(data = data_side_by_sie) +
+  geom_line(aes(x = time_gt_data, y = x_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = x_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "X Position", color = "Legend") +
+  theme_minimal() + theme(
+    axis.text.x = element_blank()  # removes the numbers
+  )
+
+# Y Position
+ggplot(data = data_side_by_sie) +
+  geom_line(aes(x = time_gt_data, y = y_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = y_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "Y Position", color = "Legend") +
+  theme_minimal() + theme(
+    axis.text.x = element_blank()  # removes the numbers
+  )
+
+# Velocity
+ggplot(data = data_side_by_sie) +
+  geom_line(aes(x = time_gt_data, y = vel_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = vel_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "Velocity", color = "Legend") +
+  theme_minimal()
+
+# Heading
+ggplot(data = data_side_by_sie) +
+  geom_line(aes(x = time_gt_data, y = heading_gt_data, color = "Ground Truth")) +
+  geom_line(aes(x = time_est_data, y = heading_est_data, color = "Estimated")) +
+  labs(x = "Time", y = "Heading (radians)", color = "Legend") +
+  theme_minimal()
+```
+
+
+* Perception 03 Test*
+  Ego stays stationary as other car drives around the ego
+
+```{r, echo = TRUE, eval = TRUE, comment = NA, warning = FALSE, message = FALSE}
+# Assume df has columns: x, y, time
+
+df_arrows <- circle %>%
+  arrange(time_gt_data) %>%
+  mutate(xend = lead(x_gt_data), yend = lead(y_gt_data)) %>%
+  filter(!is.na(xend))
+
+df_arrows02 <- circle %>%
+  arrange(time_est_data) %>%
+  mutate(xend02 = lead(x_est_data), yend02 = lead(y_est_data)) %>%
+  filter(!is.na(xend02))
+
+gt_arrows <- df_arrows %>%
+  transmute(x = x_gt_data, y = y_gt_data, xend = xend, yend = yend, type = "GT")
+
+est_arrows <- df_arrows02 %>%
+  transmute(x = x_est_data, y = y_est_data, xend = xend02, yend = yend02, type = "Estimate")
+
+combined <- bind_rows(gt_arrows, est_arrows)
+
+ggplot(combined, aes(x = x, y = y, xend = xend, yend = yend, color = type)) +
+  geom_segment(
+    arrow = arrow(type = "closed", length = unit(0.1, "inches")),
+    size = 0.3
+  ) +
+  scale_color_manual(values = c("GT" = "darkgreen", "Estimate" = "red")) +
+  coord_fixed() +
+  labs(title = "GT vs Estimated Vehicle Path", x = "X", y = "Y", color = "Path Type") +
+  theme_linedraw()
+
+
+ggplot(df_arrows, aes(x = x_gt_data, y = y_gt_data, xend = xend, yend = yend, color = time_gt_data)) +
+  geom_segment(
+    arrow = arrow(type = "closed", length = unit(0.1, "inches")),
+    size = 0.3
+  ) +
+  coord_fixed() +
+  scale_color_gradient(
+    low = "#C7F6C7", high = "#013220",
+    breaks = range(df_arrows$time_gt_data),  # force just 2 points
+    labels = c("Earliest", "Latest"),
+    guide = guide_colorbar(title = "Time")
+  ) +
+  labs(title = "Ground Truth Vehicle Path", x = "X", y = "Y") +
+  theme_linedraw()
+
+xrange <- range(df_arrows02$x_est_data, df_arrows02$xend02)
+yrange <- range(df_arrows02$y_est_data, df_arrows02$yend02)
+
+buffer_x <- diff(xrange) * 0.05  # smaller buffer = more zoom
+buffer_y <- diff(yrange) * 0.1
+
+ggplot(df_arrows02, aes(x = x_est_data, y = y_est_data, xend = xend02, yend = yend02, color = time_est_data)) +
+  geom_segment(
+    arrow = arrow(type = "closed", length = unit(0.1, "inches")),
+    size = 0.3
+  ) +
+  coord_fixed(ratio = 1/3) +
+  xlim(xrange[1] - buffer_x, xrange[2] + buffer_x) +
+  ylim(yrange[1] - buffer_y, yrange[2] + buffer_y) +
+  scale_color_gradient(
+    low = "#FADBD8", high = "#641E16",  # soft red to dark red
+    breaks = range(df_arrows02$time_est_data),
+    labels = c("Earliest", "Latest"),
+    guide = guide_colorbar(title = "Time")
+  ) +
+  labs(title = "Estimated Vehicle Path (Zoomed & Stretched)", x = "X", y = "Y") +
+  theme_linedraw()
+
+
+
+
+```
+
+
+
+
