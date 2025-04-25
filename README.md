@@ -8,3 +8,4 @@ We decomposed the autonomous driving problem into its primary components: routin
 
 
 
+Please refer to CarDemo.mov for the autonomous system in action!
